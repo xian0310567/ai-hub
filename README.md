@@ -1,36 +1,119 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Hub
 
-## Getting Started
+AI company management dashboard with Claude harness-based multi-agent orchestration.
 
-First, run the development server:
+## Overview
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+A self-hosted dashboard for managing AI agent teams. Built with Next.js + Docker + Claude Code CLI.
+
+- **Dashboard** (`/`) — Canvas-based monitoring & direct chat with team leaders
+- **Org Management** (`/org`) — Create and manage the organization hierarchy
+
+## Organization Structure
+
+```
+Division (부문)
+  └─ Department (실)
+       └─ Team (팀)
+            └─ Part (파트)
+                 └─ Agents (에이전트)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Each level has a **lead agent** you can chat with directly. Lead agents use Claude Code's native sub-agent spawning to delegate work down the hierarchy.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+When you send a message to a team leader:
 
-## Learn More
+```
+You → Team Lead → Sub-agents (via --allowedTools Task)
+                       ├─ Agent A: handles design
+                       ├─ Agent B: handles implementation
+                       └─ Agent C: handles review
+                                ↓
+                     Team Lead aggregates results → You
+```
 
-To learn more about Next.js, take a look at the following resources:
+Agent definitions are stored as `.claude/agents/*.md` files per workspace. The harness pattern (orchestrator, pipeline, scatter-gather, etc.) is baked into the lead agent's system prompt.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Stack
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Frontend**: Next.js 16 + TypeScript
+- **Runtime**: `tsx server.ts` (not `next start`) for socket.io support
+- **Database**: SQLite via `better-sqlite3`
+- **AI**: Claude Code CLI (`claude -p` / `claude --continue --allowedTools Task`)
+- **Container**: Docker + docker-compose
 
-## Deploy on Vercel
+## Quick Start
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Prerequisites
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Docker & docker-compose
+- Claude Code CLI installed and authenticated on the host machine (`claude login`)
+
+### Run
+
+```bash
+git clone https://github.com/xian0310567/ai-hub
+cd ai-hub
+
+# Edit docker-compose.yml — update workspace paths to match your machine
+docker-compose up -d
+```
+
+Open `http://localhost:3001`
+
+### Claude Authentication
+
+The container uses your host machine's Claude auth by mounting `~/.claude` and `~/.claude.json`:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - ~/.claude:/root/.claude
+  - ~/.claude.json:/root/.claude.json
+```
+
+If not authenticated, run inside the container:
+
+```bash
+docker exec -it ai-hub claude login
+```
+
+## Project Structure
+
+```
+hub/
+├── src/
+│   ├── app/
+│   │   ├── page.tsx          # Dashboard (canvas + chat)
+│   │   ├── org/page.tsx      # Org management
+│   │   └── api/
+│   │       ├── divisions/    # Division CRUD + reorder
+│   │       ├── workspaces/   # Department CRUD
+│   │       ├── teams/        # Team CRUD
+│   │       ├── parts/        # Part CRUD
+│   │       ├── agents/       # Agent CRUD + harness file generation
+│   │       └── claude/       # Claude CLI streaming chat
+│   └── lib/
+│       ├── db.ts             # SQLite schema + helpers
+│       └── sprites.ts        # Pixel art sprite renderer
+├── server.ts                 # HTTP + socket.io server
+├── Dockerfile
+└── docker-compose.yml
+```
+
+## Harness Patterns
+
+| Pattern | Description |
+|---|---|
+| Orchestrator | Lead delegates to sub-agents sequentially |
+| Scatter-Gather | All sub-agents run in parallel, results merged |
+| Pipeline | Data flows through agents in sequence |
+| Worker Pool | Lead picks the best agent per task |
+| Check-Fix | One agent works, another validates and requests fixes |
+| Single | Agent handles everything directly |
+
+## License
+
+MIT

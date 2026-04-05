@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html { font-size:16px; }
+html, body { width:100vw; height:100vh; overflow:hidden; background:#000; }
+body { font-family:'Press Start 2P', monospace; color:#fff; }
+
+/* ── Nav ── */
+nav { position:fixed; top:0; left:0; right:0; height:48px; background:#000; border-bottom:2px solid #333; display:flex; align-items:center; padding:0 20px; gap:14px; z-index:2000; }
+.nav-title { font-size:12px; color:#fff; letter-spacing:2px; }
+.nav-hint  { font-size:9px; color:#444; }
+.nav-btn   { font-size:10px; color:#aaa; background:none; border:1px solid #333; padding:6px 12px; cursor:pointer; font-family:inherit; }
+.nav-btn:hover { color:#fff; border-color:#888; }
+
+/* ── Stage ── */
+#stage { position:fixed; top:48px; left:0; right:0; bottom:0; overflow:hidden; z-index:1; cursor:default; background:#000; background-image: linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px); background-size:40px 40px; }
+#canvas { position:absolute; width:3000px; height:2000px; transform-origin:0 0; }
+
+/* ── Org Chart (canvas) ── */
+.org-team { position:absolute; background:#0a0a0a; border:1px solid #333; padding:0; min-width:300px; }
+.org-team-hdr { display:flex; align-items:center; padding:12px 16px; gap:8px; border-bottom:1px solid #222; background:#111; }
+.org-team-name { font-size:11px; letter-spacing:1px; color:#fff; }
+.org-add-btn { font-size:9px; color:#666; background:#000; border:1px solid #333; padding:4px 10px; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.org-add-btn:hover { color:#fff; border-color:#888; }
+
+.org-agent-card { display:flex; align-items:center; gap:12px; padding:12px 16px; border-left:2px solid transparent; transition:background .1s; }
+.org-agent-card:hover { background:#111; }
+.org-agent-card.lead { border-bottom:1px solid #1a1a1a; }
+.org-lead-badge { margin-left:auto; font-size:8px; color:#fff; background:#222; padding:2px 8px; border:1px solid #444; }
+.org-agent-name { font-size:11px; color:#fff; margin-bottom:3px; }
+.org-agent-role { font-size:9px; color:#555; }
+.org-empty-lead { padding:16px; text-align:center; font-size:9px; color:#333; cursor:pointer; border-bottom:1px solid #1a1a1a; }
+.org-empty-lead:hover { color:#666; }
+
+/* ── Chat Panel ── */
+#chat-panel { position:fixed; right:0; top:48px; bottom:0; width:380px; background:#000; border-left:2px solid #333; z-index:1000; display:flex; flex-direction:column; }
+.chat-panel-hdr { padding:14px 16px; border-bottom:1px solid #222; display:flex; align-items:center; justify-content:space-between; color:#fff; flex-shrink:0; }
+.chat-panel-log { flex:1; overflow-y:auto; padding:14px; scrollbar-width:thin; scrollbar-color:#222 transparent; }
+.claude-msg { font-size:11px; margin-bottom:10px; line-height:2; padding:8px 12px; }
+.claude-msg.user { background:#1a1a1a; color:#fff; text-align:right; border-right:2px solid #fff; }
+.claude-msg.assistant { background:#0a0a0a; color:#ccc; border-left:2px solid #444; }
+.chat-input-row { display:flex; gap:0; border-top:1px solid #222; flex-shrink:0; }
+#claude-input { flex:1; background:#000; border:none; border-right:1px solid #333; color:#fff; font-family:inherit; font-size:10px; padding:12px 14px; }
+#claude-input::placeholder { color:#333; }
+#claude-input:focus { outline:none; }
+#claude-send-btn { font-size:11px; background:#000; color:#fff; border:none; padding:12px 16px; cursor:pointer; font-family:inherit; }
+#claude-send-btn:hover { background:#111; }
+#claude-send-btn:disabled { color:#333; }
+
+/* ── Modal ── */
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:9000; display:flex; align-items:center; justify-content:center; }
+.modal { background:#000; border:2px solid #333; padding:28px; width:460px; display:flex; flex-direction:column; gap:18px; }
+.modal-title { font-size:11px; color:#fff; letter-spacing:2px; margin-bottom:4px; border-bottom:1px solid #222; padding-bottom:12px; }
+.modal-label { font-size:9px; color:#666; display:flex; flex-direction:column; gap:8px; }
+.modal-input { background:#0a0a0a; border:1px solid #333; color:#fff; font-family:inherit; font-size:10px; padding:10px 12px; width:100%; }
+.modal-input:focus { outline:none; border-color:#fff; }
+.modal-btn-cancel { font-size:9px; color:#555; background:none; border:1px solid #333; padding:10px 20px; cursor:pointer; font-family:inherit; flex:1; }
+.modal-btn-cancel:hover { color:#fff; border-color:#888; }
+.modal-btn-ok { font-size:9px; color:#000; background:#fff; border:none; padding:10px 20px; cursor:pointer; font-family:inherit; flex:2; }
+.modal-btn-ok:hover { background:#ccc; }
+.modal-btn-ok:disabled { opacity:.4; cursor:not-allowed; }
+
+/* ── Org Management Page ── */
+.org-page { min-height:100vh; background:#000; color:#fff; font-family:'Press Start 2P',monospace; overflow-y:auto; }
+.org-page-hdr { border-bottom:2px solid #333; padding:16px 32px; display:flex; align-items:center; gap:16px; position:sticky; top:0; background:#000; z-index:100; }
+.org-stat-card { flex:1; background:#0a0a0a; border:1px solid #222; padding:14px 12px; text-align:center; }
+.org-stat-val { font-size:20px; color:#fff; margin-bottom:6px; }
+.org-stat-lbl { font-size:8px; color:#555; }
+
+.org-row { display:flex; align-items:center; gap:10px; padding:10px 16px; }
+.org-row-actions { display:flex; gap:6px; margin-left:auto; align-items:center; flex-shrink:0; }
+.org-expand { background:none; border:none; color:#555; cursor:pointer; font-size:12px; padding:0 4px; font-family:inherit; min-width:16px; }
+.org-expand:hover { color:#fff; }
+.org-add-mini { font-size:8px; color:#666; background:#000; border:1px solid #333; padding:4px 10px; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.org-add-mini:hover { color:#fff; border-color:#888; }
+.org-del-btn { font-size:12px; color:#333; background:none; border:none; cursor:pointer; padding:0 4px; }
+.org-del-btn:hover { color:#ff4444; }
+.org-empty-hint { font-size:8px; color:#222; padding:10px 20px; cursor:pointer; text-align:center; border:1px dashed #222; margin:4px 0; }
+.org-empty-hint:hover { color:#555; border-color:#555; }
+
+/* DnD */
+.org-dnd-item { transition:opacity .15s; }
+.org-dnd-item.dragging { opacity:.3; }
+.org-dnd-item.drag-over { border-top:2px solid #fff !important; }
+
+/* ── Tooltip ── */
+#tooltip { position:fixed; z-index:5000; pointer-events:none; display:none; background:#000; border:1px solid #333; padding:10px 14px; max-width:220px; }
+.tt-name { font-size:13px; color:#fff; margin-bottom:6px; }
+.tt-desc { font-size:9px; color:#666; line-height:1.8; }

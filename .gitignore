@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.data/
+*.env
+auth.env
+.telegram_session
+*.session
+.claude.json

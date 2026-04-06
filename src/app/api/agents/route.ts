@@ -1,31 +1,35 @@
 import { NextRequest } from 'next/server';
 import { Agents, Teams, Parts, Workspaces } from '@/lib/db';
+import { getSession } from '@/lib/auth';
 import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 
-export async function GET() {
-  return Response.json({ ok: true, agents: Agents.listAll() });
+export async function GET(req: NextRequest) {
+  const user = getSession(req);
+  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  return Response.json({ ok: true, agents: Agents.listByUser(user.id) });
 }
 
 // POST /api/agents
-// org_level: 'department' | 'team' | 'part' | 'worker'
-// 소속: team_id (팀장/팀워커) | part_id (파트장/파트워커) | parent_agent_id (서브에이전트)
 export async function POST(req: NextRequest) {
+  const user = getSession(req);
+  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
   const {
     team_id, part_id, parent_agent_id, name,
     emoji = '🤖', color = '#6b7280',
     role = '', harness_pattern = 'orchestrator',
-    org_level,
+    model = 'claude-sonnet-4-5', org_level,
   } = await req.json() as {
     team_id?: string; part_id?: string; parent_agent_id?: string; name: string;
     emoji?: string; color?: string; role?: string; harness_pattern?: string;
-    org_level?: string;
+    model?: string; org_level?: string;
   };
 
   if (!name?.trim()) return Response.json({ ok: false, error: '이름 필수' }, { status: 400 });
 
-  // workspace 결정
   let workspace_id: string;
   let wsPath: string;
   let resolvedTeamId = team_id ?? null;
@@ -35,22 +39,22 @@ export async function POST(req: NextRequest) {
 
   if (part_id) {
     const part = Parts.get(part_id);
-    if (!part) return Response.json({ ok: false, error: '파트 없음' }, { status: 404 });
+    if (!part || part.user_id !== user.id) return Response.json({ ok: false, error: '파트 없음' }, { status: 404 });
     const team = Teams.get(part.team_id);
     if (!team) return Response.json({ ok: false, error: '팀 없음' }, { status: 404 });
     workspace_id = team.workspace_id;
     resolvedTeamId = part.team_id;
-    is_lead = parent_agent_id ? 0 : 1; // 파트에 직접 추가 = 파트장
+    is_lead = parent_agent_id ? 0 : 1;
     level = is_lead ? 'part' : 'worker';
   } else if (team_id) {
     const team = Teams.get(team_id);
-    if (!team) return Response.json({ ok: false, error: '팀 없음' }, { status: 404 });
+    if (!team || team.user_id !== user.id) return Response.json({ ok: false, error: '팀 없음' }, { status: 404 });
     workspace_id = team.workspace_id;
-    is_lead = parent_agent_id ? 0 : 1; // 팀에 직접 추가 = 팀장
+    is_lead = parent_agent_id ? 0 : 1;
     level = is_lead ? 'team' : 'worker';
   } else if (parent_agent_id) {
     const parent = Agents.get(parent_agent_id);
-    if (!parent) return Response.json({ ok: false, error: '부모 없음' }, { status: 404 });
+    if (!parent || parent.user_id !== user.id) return Response.json({ ok: false, error: '부모 없음' }, { status: 404 });
     workspace_id = parent.workspace_id;
     resolvedTeamId = parent.team_id;
     resolvedPartId = parent.part_id;
@@ -82,28 +86,58 @@ export async function POST(req: NextRequest) {
     team_id: resolvedTeamId, part_id: resolvedPartId,
     parent_agent_id: parent_agent_id ?? null,
     org_level: level, is_lead, name, emoji, color,
-    soul: '', command_name: cmd, harness_pattern,
+    soul: '', command_name: cmd, harness_pattern, model,
+    user_id: user.id,
   });
+
+  // 소속 컨텍스트 조립
+  const wsInfo = Workspaces.get(workspace_id);
+  const teamName = resolvedTeamId ? Teams.get(resolvedTeamId)?.name : null;
+  const context = [wsInfo?.name, teamName].filter(Boolean).join(' > ');
+
+  // 소울 파일 경로
+  const soulFilePath = is_lead
+    ? path.join(wsPath, 'SOUL.md')
+    : path.join(wsPath, '.claude', 'agents', `${cmd}.md`);
+
+  // Claude CLI로 소울 자동 생성 (백그라운드)
+  generateSoulAsync(id, wsPath, name, role, level, harness_pattern, context, soulFilePath);
 
   return Response.json({ ok: true, agent: Agents.get(id) });
 }
 
 // DELETE /api/agents?id=xxx
-export async function DELETE(req: Request) {
+export async function DELETE(req: NextRequest) {
+  const user = getSession(req);
+  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return Response.json({ ok: false, error: 'id required' }, { status: 400 });
+
+  const agent = Agents.get(id);
+  if (!agent || agent.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
+
   Agents.delete(id);
   return Response.json({ ok: true });
 }
 
 // PATCH /api/agents
-export async function PATCH(req: Request) {
-  const { id, name, emoji, color } = await req.json();
+export async function PATCH(req: NextRequest) {
+  const user = getSession(req);
+  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
+  const { id, name, emoji, color, command_name, harness_pattern, model } = await req.json();
   if (!id) return Response.json({ ok: false, error: 'id required' }, { status: 400 });
-  if (!Agents.get(id)) return Response.json({ ok: false, error: '없음' }, { status: 404 });
-  if (name)  Agents.update(id, { name });
-  if (emoji) Agents.update(id, { emoji });
-  if (color) Agents.update(id, { color });
+
+  const agent = Agents.get(id);
+  if (!agent || agent.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
+
+  if (name)                        Agents.update(id, { name });
+  if (emoji)                       Agents.update(id, { emoji });
+  if (color)                       Agents.update(id, { color });
+  if (command_name !== undefined)  Agents.update(id, { command_name });
+  if (harness_pattern)             Agents.update(id, { harness_pattern });
+  if (model)                       Agents.update(id, { model });
   return Response.json({ ok: true, agent: Agents.get(id) });
 }
 
@@ -163,6 +197,60 @@ description: "${name} — ${role || '전문 처리 에이전트'}. 위임받은 
 - 맡은 작업에 집중합니다.
 - 결과는 명확하고 구조화된 형태로 반환합니다.
 `;
+}
+
+// ── Claude CLI로 소울 자동 생성 (백그라운드) ──────────────────────────
+function generateSoulAsync(
+  agentId: string,
+  wsPath: string,
+  name: string,
+  role: string,
+  level: string,
+  pattern: string,
+  context: string,
+  soulFilePath: string,
+) {
+  const levelKo = LEVEL_KO[level] || '에이전트';
+  const prompt = `당신은 AI 회사 에이전트 시스템의 설계자입니다.
+아래 에이전트의 SOUL.md(핵심 지침서)를 한국어로 작성해주세요.
+
+에이전트 정보:
+- 이름: ${name}
+- 포지션: ${levelKo}
+- 역할/설명: ${role || '(없음)'}
+- 소속: ${context}
+- 처리 패턴: ${pattern}
+
+SOUL.md 작성 규칙:
+1. 마크다운 형식, 4~6개 섹션
+2. ## 정체성, ## 핵심 역할, ## 업무 처리 원칙, ## 보고 형식 섹션은 반드시 포함
+3. 구체적이고 실용적으로 — 실제로 Claude가 이걸 읽고 역할을 수행할 수 있어야 함
+4. 불필요한 설명 없이 바로 내용만 작성
+5. 150~300 단어 분량
+
+SOUL.md 내용만 출력하세요 (다른 설명 없이):`;
+
+  // 백그라운드로 실행 (응답 블로킹 안 함)
+  setImmediate(async () => {
+    try {
+      const result = execFileSync('claude', ['-p', prompt], {
+        cwd: wsPath,
+        encoding: 'utf8',
+        timeout: 60000,
+        env: { ...process.env },
+      });
+      const soul = result.trim();
+      if (soul && soul.length > 50) {
+        fs.writeFileSync(soulFilePath, soul, 'utf8');
+        // CLAUDE.md도 동기화 (is_lead인 경우)
+        const claudeMd = path.join(wsPath, 'CLAUDE.md');
+        if (!fs.existsSync(claudeMd)) fs.writeFileSync(claudeMd, soul, 'utf8');
+        Agents.update(agentId, { soul });
+      }
+    } catch {
+      // Claude CLI 없거나 오류 시 기존 파일 그대로 유지
+    }
+  });
 }
 
 function registerSubInLead(wsPath: string, parentId: string, subName: string, subCmd: string, subRole: string) {

@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-hub-dev",
+      "runtimeExecutable": "/Users/zesty/.nvm/versions/node/v22.16.0/bin/node",
+      "env": { "PATH": "/Users/zesty/.nvm/versions/node/v22.16.0/bin:/usr/local/bin:/usr/bin:/bin" },
+      "runtimeArgs": ["node_modules/.bin/tsx", "server.ts"],
+      "port": 3001
+    }
+  ],
+  "autoVerify": false
+}

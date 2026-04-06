@@ -3,19 +3,11 @@ services:
     build: .
     container_name: ai-hub
     ports:
-      - "3001:3001"
+      - "${PORT:-3001}:3001"
     volumes:
       - hub_data:/data
-      # 호스트 PC의 claude 인증 그대로 마운트 (claude login 불필요)
-      - C:/Users/the_c/.claude:/root/.claude
-      - C:/Users/the_c/.claude.json:/root/.claude.json
-      # workspace 마운트
-      - C:/Users/the_c/.openclaw/workspace-cofounder:/root/.openclaw/workspace-cofounder:ro
-      - C:/Users/the_c/.openclaw/workspace-zesty:/root/.openclaw/workspace-zesty
-      - C:/Users/the_c/.openclaw/workspace-insta:/root/.openclaw/workspace-insta:ro
-      - C:/Users/the_c/.openclaw/workspace-quant:/root/.openclaw/workspace-quant:ro
-      - C:/Users/the_c/.openclaw/workspace-quant-kr:/root/.openclaw/workspace-quant-kr:ro
-      - C:/Users/the_c/.openclaw/workspace-pod:/root/.openclaw/workspace-pod:ro
+      # 호스트 PC의 claude 인증 마운트 (.env의 CLAUDE_DIR 또는 기본값)
+      - ${CLAUDE_DIR:-~/.claude}:/root/.claude
     environment:
       - DATA_DIR=/data
       - WORKSPACES_DIR=/data/workspaces

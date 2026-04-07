@@ -163,6 +163,9 @@ try { db.exec('ALTER TABLE parts ADD COLUMN order_index INTEGER NOT NULL DEFAULT
 try { db.exec(`ALTER TABLE divisions ADD COLUMN harness_prompt TEXT NOT NULL DEFAULT ''`); } catch {}
 try { db.exec(`ALTER TABLE workspaces ADD COLUMN harness_prompt TEXT NOT NULL DEFAULT ''`); } catch {}
 try { db.exec(`ALTER TABLE teams ADD COLUMN harness_prompt TEXT NOT NULL DEFAULT ''`); } catch {}
+// 미션 이미지 지원
+try { db.exec(`ALTER TABLE missions ADD COLUMN images TEXT NOT NULL DEFAULT '[]'`); } catch {}
+
 
 export default db;
 
@@ -350,7 +353,7 @@ export interface Task {
 }
 export interface Mission {
   id: string; user_id: string; task: string; status: string;
-  routing: string; steps: string; final_doc: string;
+  routing: string; steps: string; final_doc: string; images?: string;
   created_at?: number; updated_at?: number;
 }
 export interface MissionJob {

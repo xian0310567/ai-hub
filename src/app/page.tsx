@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { drawSprite } from '@/lib/sprites';
 
@@ -18,6 +18,11 @@ interface MissionItem {
   steps: any[];
   doc: string;
   err: string;
+  progress?: {
+    total: number;
+    completed: number;
+    percentage: number;
+  };
 }
 
 export default function Dashboard() {
@@ -35,10 +40,13 @@ export default function Dashboard() {
   // 미션 상태 (다중 미션 지원)
   const [missions, setMissions] = useState<MissionItem[]>([]);
   const [missionInput, setMissionInput] = useState('');
+  const [missionImages, setMissionImages] = useState<string[]>([]);
   const [activeMissionId, setActiveMissionId] = useState<string|null>(null);
   const [missionResultOpen, setMissionResultOpen] = useState(false);
+  const [routingReportId, setRoutingReportId] = useState<string|null>(null);
   const missionLogRef = useRef<HTMLDivElement>(null);
   const pollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+  const runningPollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const toggleStep = useCallback((missionId: string, idx: number) => {
     const key = `${missionId}-${idx}`;
@@ -63,7 +71,7 @@ export default function Dashboard() {
     }).catch(()=>{});
   }, []);
 
-  const loadMissions = useCallback((resumePoll: (id: string) => void) => {
+  const loadMissions = useCallback((resumePoll: (id: string) => void, resumeRunningPoll: (id: string) => void) => {
     fetch('/api/missions').then(r=>r.json()).then(d=>{
       if (!d.ok) return;
       const loaded: MissionItem[] = d.missions.map((m: any) => {
@@ -94,6 +102,8 @@ export default function Dashboard() {
       setMissions(loaded);
       // analyzing 상태인 미션은 폴링 재개
       loaded.filter(m => m.phase === 'routing').forEach(m => resumePoll(m.id));
+      // running 상태인 미션은 진행 상황 폴링 재개
+      loaded.filter(m => m.phase === 'running').forEach(m => resumeRunningPoll(m.id));
     }).catch(()=>{});
   }, []);
 
@@ -141,7 +151,8 @@ export default function Dashboard() {
     const onDown=(e:MouseEvent)=>{ if(e.button===1||e.button===0&&st.spaceDown){e.preventDefault();st.drag=true;st.lx=e.clientX;st.ly=e.clientY;} };
     const onMove=(e:MouseEvent)=>{ if(!st.drag)return; st.tx+=e.clientX-st.lx; st.ty+=e.clientY-st.ly; st.lx=e.clientX; st.ly=e.clientY; applyT(); };
     const onUp=()=>{ st.drag=false; };
-    const onKey=(e:KeyboardEvent)=>{ if(e.code==='Space'&&!e.ctrlKey){e.preventDefault();st.spaceDown=true;stage.style.cursor='grab';} };
+    const isTyping=()=>{ const el=document.activeElement; if(!el) return false; const tag=el.tagName; return tag==='INPUT'||tag==='TEXTAREA'||(el as HTMLElement).isContentEditable; };
+    const onKey=(e:KeyboardEvent)=>{ if(e.code==='Space'&&!e.ctrlKey&&!isTyping()){e.preventDefault();st.spaceDown=true;stage.style.cursor='grab';} };
     const onKeyUp=(e:KeyboardEvent)=>{ if(e.code==='Space'){st.spaceDown=false;stage.style.cursor='default';} };
     stage.addEventListener('wheel',onWheel,{passive:false});
     stage.addEventListener('mousedown',onDown);
@@ -163,6 +174,39 @@ export default function Dashboard() {
       delete pollRefs.current[missionId];
     }
   }, []);
+
+  const stopRunningPolling = useCallback((missionId: string) => {
+    if (runningPollRefs.current[missionId]) {
+      clearInterval(runningPollRefs.current[missionId]);
+      delete runningPollRefs.current[missionId];
+    }
+  }, []);
+
+  const startRunningPolling = useCallback((missionId: string) => {
+    stopRunningPolling(missionId);
+    runningPollRefs.current[missionId] = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/missions/${missionId}/status`);
+        const d = await r.json();
+        if (!d.ok) return;
+
+        // steps와 progress 업데이트
+        updateMission(missionId, {
+          steps: d.steps || [],
+          progress: d.progress,
+        });
+
+        // 미션 완료/실패 시 폴링 중단
+        if (d.mission?.status === 'done') {
+          stopRunningPolling(missionId);
+          updateMission(missionId, { phase: 'done' });
+        } else if (d.mission?.status === 'failed') {
+          stopRunningPolling(missionId);
+          updateMission(missionId, { phase: 'error', err: '실행 실패' });
+        }
+      } catch {}
+    }, 2000);
+  }, [stopRunningPolling, updateMission]);
 
   const startPolling = useCallback((missionId: string) => {
     stopPolling(missionId);
@@ -200,19 +244,22 @@ export default function Dashboard() {
   // cleanup all polls
   useEffect(() => () => {
     Object.keys(pollRefs.current).forEach(id => clearInterval(pollRefs.current[id]));
+    Object.keys(runningPollRefs.current).forEach(id => clearInterval(runningPollRefs.current[id]));
   }, []);
 
   // 초기 미션 히스토리 로드 (startPolling이 정의된 이후)
-  useEffect(() => { loadMissions(startPolling); }, [loadMissions, startPolling]);
+  useEffect(() => { loadMissions(startPolling, startRunningPolling); }, [loadMissions, startPolling, startRunningPolling]);
 
   const submitMission = useCallback(async () => {
     if (!missionInput.trim()) return;
     const task = missionInput.trim();
+    const images = missionImages.slice();
     setMissionInput('');
+    setMissionImages([]);
     try {
       const r = await fetch('/api/missions', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ task }),
+        body: JSON.stringify({ task, images }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
@@ -228,14 +275,76 @@ export default function Dashboard() {
       const errId = `err-${Date.now()}`;
       setMissions(prev => [{ id: errId, task, phase: 'error', data: null, clarify: null, steps: [], doc: '', err: e.message }, ...prev]);
     }
-  }, [missionInput, startPolling]);
+  }, [missionInput, missionImages, startPolling]);
 
   const removeMission = useCallback((missionId: string) => {
     stopPolling(missionId);
     setMissions(prev => prev.filter(m => m.id !== missionId));
     setActiveMissionId(prev => prev === missionId ? null : prev);
     setMissionResultOpen(false);
+    // err- 접두사는 DB에 저장되지 않은 임시 에러 미션
+    if (!missionId.startsWith('err-')) {
+      fetch(`/api/missions?id=${missionId}`, { method: 'DELETE' }).catch(() => {});
+    }
   }, [stopPolling]);
+
+  // 이미지 처리 유틸리티
+  const addImage = useCallback((file: File) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (!allowedTypes.includes(file.type)) {
+      alert(`허용되지 않는 이미지 형식입니다. (jpeg, png, gif, webp만 가능)`);
+      return;
+    }
+    if (file.size > maxSize) {
+      alert(`이미지 크기는 5MB를 초과할 수 없습니다. (현재: ${(file.size / 1024 / 1024).toFixed(1)}MB)`);
+      return;
+    }
+    if (missionImages.length >= 5) {
+      alert('최대 5개까지 이미지를 첨부할 수 있습니다.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target?.result as string;
+      setMissionImages(prev => [...prev, base64]);
+    };
+    reader.readAsDataURL(file);
+  }, [missionImages.length]);
+
+  const removeImage = useCallback((index: number) => {
+    setMissionImages(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) addImage(file);
+        break;
+      }
+    }
+  }, [addImage]);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach(file => {
+      if (file.type.startsWith('image/')) {
+        addImage(file);
+      }
+    });
+  }, [addImage]);
 
   const pickClarifyOption = useCallback(async (missionId: string, option: any) => {
     if (option.extra_routing === null) {
@@ -274,6 +383,9 @@ export default function Dashboard() {
       steps: missionData.routing.map((r: any) => ({ org_name: r.org_name, agent_name: r.agent_name, status: 'pending' })),
       doc: '', err: '',
     });
+
+    // 진행 상황 폴링 시작
+    startRunningPolling(missionId);
     try {
       const resp = await fetch(`/api/missions/${missionId}/run`, { method: 'POST' });
       const reader = resp.body!.getReader();
@@ -295,19 +407,35 @@ export default function Dashboard() {
                 ...m, steps: m.steps.map((s: any, i: number) => i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error } : s)
               } : m));
             } else if (ev.type === 'done') {
+              stopRunningPolling(missionId);
               updateMission(missionId, { phase: 'done', doc: ev.final_doc });
             } else if (ev.type === 'error') {
+              stopRunningPolling(missionId);
               updateMission(missionId, { err: ev.error });
             }
           } catch {}
         }
       }
     } catch (e: any) {
+      stopRunningPolling(missionId);
       updateMission(missionId, { err: e.message, phase: 'error' });
     }
-  }, [updateMission]);
+  }, [updateMission, startRunningPolling, stopRunningPolling]);
 
   const activeMission = missions.find(m => m.id === activeMissionId) || null;
+
+  // 현재 실행 중인 에이전트 ID 집합 (오피스 맵 시각화용)
+  const runningAgentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of missions) {
+      if (m.phase === 'running' && m.data?.routing) {
+        (m.data.routing as any[]).forEach((r: any, i: number) => {
+          if (m.steps[i]?.status === 'running') ids.add(r.agent_id);
+        });
+      }
+    }
+    return ids;
+  }, [missions]);
 
   useEffect(() => {
     if (missionLogRef.current) missionLogRef.current.scrollTop = missionLogRef.current.scrollHeight;
@@ -365,7 +493,43 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div suppressHydrationWarning style={{marginLeft:'auto',fontSize:12,fontWeight:500,padding:'4px 11px',border:'1px solid',borderRadius:4,
+        <button
+          onClick={async () => {
+            if (confirm('로그아웃하시겠습니까?')) {
+              try {
+                await fetch('/api/auth/signout', { method: 'POST' });
+                router.push('/login');
+              } catch (e) {
+                alert('로그아웃 실패');
+              }
+            }
+          }}
+          style={{
+            marginLeft: 'auto',
+            fontSize: 12,
+            fontWeight: 500,
+            color: 'var(--text-secondary)',
+            textDecoration: 'none',
+            padding: '4px 10px',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            transition: 'all .12s',
+            background: 'none',
+            cursor: 'pointer'
+          }}
+          onMouseOver={e => {
+            e.currentTarget.style.color = 'var(--danger)';
+            e.currentTarget.style.borderColor = 'var(--danger)';
+          }}
+          onMouseOut={e => {
+            e.currentTarget.style.color = 'var(--text-secondary)';
+            e.currentTarget.style.borderColor = 'var(--border)';
+          }}
+        >
+          로그아웃
+        </button>
+
+        <div suppressHydrationWarning style={{fontSize:12,fontWeight:500,padding:'4px 11px',border:'1px solid',borderRadius:4,
           borderColor:authStatus?.loggedIn?'#14ae5c44':'var(--danger-dim)',
           background:authStatus?.loggedIn?'#14ae5c11':'var(--danger-dim)',
           color:authStatus?.loggedIn?'var(--success)':'var(--danger)',cursor:authStatus?.loggedIn?'default':'pointer'}}
@@ -408,9 +572,56 @@ export default function Dashboard() {
                   onMouseOver={e=>e.currentTarget.style.color='var(--danger)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>✕</button>
               </div>
 
+              {/* 진행률 바 (running 상태 미션만) */}
+              {m.phase==='running' && m.progress && (
+                <div style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
+                  <div style={{width:'100%',height:'8px',background:'var(--bg-canvas)',borderRadius:'4px',overflow:'hidden'}}>
+                    <div
+                      style={{
+                        width: `${m.progress.percentage}%`,
+                        height: '100%',
+                        background: 'var(--accent)',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,fontSize:9,color:'var(--text-muted)'}}>
+                    <span>{m.progress.completed}/{m.progress.total} 완료</span>
+                    {(() => {
+                      const runningStep = m.steps.find((s:any) => s.status === 'running');
+                      const waitingCount = m.steps.filter((s:any) => s.status === 'waiting' || s.status === 'queued').length;
+                      return (
+                        <div style={{display:'flex',alignItems:'center',gap:4}}>
+                          {runningStep && (
+                            <span style={{color:'var(--accent)',fontWeight:600}}>
+                              ▶ {runningStep.agent_name}
+                            </span>
+                          )}
+                          {waitingCount > 0 && (
+                            <span style={{color:'var(--text-muted)'}}>
+                              | 대기 {waitingCount}개
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+
               {/* 확장된 미션 상세 (활성 미션만) */}
               {activeMissionId===m.id && (
                 <div style={{marginTop:10,borderTop:'1px solid var(--border-subtle)',paddingTop:10}} onClick={e=>e.stopPropagation()}>
+                  {/* 원본 미션 지시 내용 */}
+                  <div style={{marginBottom:12,padding:'10px 12px',background:'var(--bg-canvas)',border:'1px solid var(--border-subtle)',borderRadius:6}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
+                      <span style={{fontSize:11,fontWeight:700,color:'var(--accent)'}}>📋 원본 미션 지시</span>
+                    </div>
+                    <div style={{fontSize:11,color:'var(--text-primary)',lineHeight:1.6,whiteSpace:'pre-wrap',maxHeight:'200px',overflowY:'auto'}}>
+                      {m.task}
+                    </div>
+                  </div>
+
                   {m.phase==='routing' && (
                     <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0'}}>
                       <span style={{fontSize:12}}>⏳</span>
@@ -443,18 +654,14 @@ export default function Dashboard() {
 
                   {m.phase==='confirm' && m.data && (
                     <div>
-                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
-                        <span style={{fontSize:11,fontWeight:700,color:'var(--text-primary)'}}>📋 라우팅 분석 완료</span>
-                        {m.data.summary && <span style={{fontSize:9,color:'var(--text-muted)'}}>— {m.data.summary}</span>}
-                      </div>
-                      <div style={{display:'flex',flexDirection:'column',gap:4,marginBottom:10}}>
-                        {m.data.routing?.map((r: any, i: number) => (
-                          <div key={i} style={{fontSize:10,color:'var(--text-secondary)',padding:'5px 8px',background:'var(--bg-canvas)',border:'1px solid var(--border-subtle)',borderRadius:4,borderLeft:`2px solid ${r.org_type==='division'?'#7c3aed':r.org_type==='department'?'#4f46e5':'#0891b2'}`}}>
-                            <span style={{fontWeight:600,color:'var(--text-primary)'}}>{r.org_name}</span>
-                            <span style={{color:'var(--text-muted)',marginLeft:4}}>→ {r.agent_name}</span>
-                            <div style={{marginTop:2,lineHeight:1.4}}>{r.subtask}</div>
-                          </div>
-                        ))}
+                      {m.data.summary && (
+                        <div style={{fontSize:10,color:'var(--text-muted)',lineHeight:1.5,marginBottom:8,padding:'6px 8px',background:'var(--bg-canvas)',borderRadius:4,borderLeft:'2px solid var(--accent)'}}>
+                          {m.data.summary}
+                        </div>
+                      )}
+                      <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:8}}>
+                        <span style={{fontSize:10,color:'var(--text-secondary)'}}>{m.data.routing?.length}개 조직 배정됨</span>
+                        <button onClick={()=>setRoutingReportId(m.id)} style={{marginLeft:'auto',fontSize:10,background:'none',border:'1px solid var(--accent)',color:'var(--accent)',padding:'3px 10px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>📋 보고서 보기</button>
                       </div>
                       <div style={{display:'flex',gap:6}}>
                         <button onClick={()=>removeMission(m.id)} style={{flex:1,fontSize:10,background:'none',border:'1px solid var(--border)',color:'var(--text-muted)',padding:'6px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>취소</button>
@@ -477,7 +684,14 @@ export default function Dashboard() {
                                 style={{display:'flex',alignItems:'center',gap:6,padding:'5px 8px',fontSize:10,cursor:hasOutput?'pointer':'default'}}
                                 onClick={()=>hasOutput&&toggleStep(m.id,i)}
                               >
-                                <span>{s.status==='done'?'✅':s.status==='running'?'🔄':s.status==='failed'?'❌':s.status==='waiting'?'⏸️':'⏳'}</span>
+                                <div className="agent-indicator">
+                                  {s.status==='queued' && <div className="agent-indicator-queued" />}
+                                  {s.status==='waiting' && <div className="agent-indicator-waiting" />}
+                                  {s.status==='running' && <div className="agent-indicator-running" />}
+                                  {s.status==='done' && <span className="agent-indicator-done">✓</span>}
+                                  {s.status==='failed' && <span className="agent-indicator-failed">✕</span>}
+                                  {!s.status && <div className="agent-indicator-queued" />}
+                                </div>
                                 <span style={{fontWeight:500,color:'var(--text-primary)',flex:1}}>{s.org_name}</span>
                                 <span style={{color:'var(--text-muted)',fontSize:9}}>{s.status==='running'?'작업 중':s.status==='done'?'완료':s.status==='failed'?'실패':s.status==='waiting'?`대기 ${s.queue_position??''}번째`:'대기'}</span>
                                 {hasOutput && <span style={{color:'var(--text-muted)',fontSize:9,marginLeft:4}}>{isExpanded?'▲':'▼'}</span>}
@@ -515,14 +729,43 @@ export default function Dashboard() {
           ))}
         </div>
         <div className="mission-input-area">
-          <div style={{display:'flex',gap:6}}>
-            <input
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            <textarea
               value={missionInput} onChange={e=>setMissionInput(e.target.value)}
-              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&submitMission()}
-              placeholder="미션을 입력하세요..."
-              style={{flex:1,background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px',color:'var(--text-primary)',fontSize:11,fontFamily:'inherit',outline:'none'}}
+              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&(e.preventDefault(),submitMission())}
+              onPaste={handlePaste}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              placeholder="미션을 입력하세요... (Shift+Enter로 줄바꿈, Ctrl/Cmd+V로 이미지 붙여넣기)"
+              rows={2}
+              style={{width:'100%',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px',color:'var(--text-primary)',fontSize:11,fontFamily:'inherit',outline:'none',resize:'none',lineHeight:1.6,overflowY:'hidden',boxSizing:'border-box'}}
+              ref={el=>{ if(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; } }}
+              onInput={e=>{ const el=e.currentTarget; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }}
             />
-            <button onClick={submitMission} disabled={!missionInput.trim()} style={{background:'var(--accent-purple)',color:'#fff',border:'none',borderRadius:6,padding:'8px 14px',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',opacity:missionInput.trim()?1:0.4,flexShrink:0,whiteSpace:'nowrap'}}>
+            {missionImages.length > 0 && (
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <span style={{fontSize:10,color:'var(--text-muted)',fontWeight:500}}>{missionImages.length}/5 images</span>
+                </div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                  {missionImages.map((img, idx) => (
+                    <div key={idx} style={{position:'relative',width:60,height:60,borderRadius:4,overflow:'hidden',border:'1px solid var(--border)'}}>
+                      <img src={img} alt={`첨부 이미지 ${idx + 1}`} style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                      <button
+                        onClick={() => removeImage(idx)}
+                        aria-label={`이미지 ${idx + 1} 삭제`}
+                        style={{position:'absolute',top:2,right:2,width:18,height:18,borderRadius:'50%',background:'rgba(0,0,0,0.7)',border:'none',color:'#fff',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1,padding:0}}
+                        onMouseOver={e=>e.currentTarget.style.background='var(--danger)'}
+                        onMouseOut={e=>e.currentTarget.style.background='rgba(0,0,0,0.7)'}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button onClick={submitMission} disabled={!missionInput.trim()} style={{background:'var(--accent-purple)',color:'#fff',border:'none',borderRadius:6,padding:'7px',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',opacity:missionInput.trim()?1:0.4,width:'100%'}}>
               전송
             </button>
           </div>
@@ -543,7 +786,7 @@ export default function Dashboard() {
 
               {/* 부문 룸들 */}
               {divs.map(div => (
-                <DivisionRoom key={div.id} div={div} onSelect={setSelectedAgent} />
+                <DivisionRoom key={div.id} div={div} onSelect={setSelectedAgent} runningAgentIds={runningAgentIds} />
               ))}
 
               {/* 독립 실들 */}
@@ -553,7 +796,7 @@ export default function Dashboard() {
                     ─ 독립 실 ─
                   </div>
                   <div style={{display:'flex',gap:20,flexWrap:'wrap',alignItems:'flex-start'}}>
-                    {standalone.map(d => <DeptRoom key={d.id} dept={d} onSelect={setSelectedAgent} />)}
+                    {standalone.map(d => <DeptRoom key={d.id} dept={d} onSelect={setSelectedAgent} runningAgentIds={runningAgentIds} />)}
                   </div>
                 </div>
               )}
@@ -597,6 +840,19 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* ── 라우팅 보고서 모달 ── */}
+      {routingReportId && (() => {
+        const rm = missions.find(m => m.id === routingReportId);
+        if (!rm?.data) return null;
+        return (
+          <RoutingReportModal
+            mission={rm}
+            onClose={()=>setRoutingReportId(null)}
+            onRun={()=>{setRoutingReportId(null);runMission(rm.id);}}
+          />
+        );
+      })()}
+
       {/* ── 미션 결과 오버레이 ── */}
       {missionResultOpen && activeMission?.doc && (
         <div className="modal-backdrop" onClick={()=>setMissionResultOpen(false)}>
@@ -616,6 +872,93 @@ export default function Dashboard() {
 
       {loginModal && <LoginModal onClose={()=>setLoginModal(false)} onDone={()=>{setLoginModal(false);fetch('/api/auth').then(r=>r.json()).then(d=>setAuthStatus({loggedIn:d.loggedIn}));}} />}
     </>
+  );
+}
+
+// ── 라우팅 보고서 모달 컴포넌트 ──────────────────────────────────────
+function RoutingReportModal({ mission, onClose, onRun }: { mission: MissionItem; onClose: ()=>void; onRun: ()=>void }) {
+  const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
+  const orgColor = (type: string) => type==='division'?'#7c3aed':type==='department'?'#4f46e5':'#0891b2';
+  const toggleCard = (i: number) => setExpandedCards(prev => {
+    const next = new Set(prev); next.has(i) ? next.delete(i) : next.add(i); return next;
+  });
+  const routing = mission.data?.routing ?? [];
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div style={{background:'var(--bg-panel)',border:'1px solid var(--border)',borderRadius:10,width:'min(980px,95vw)',maxHeight:'88vh',display:'flex',flexDirection:'column',boxShadow:'0 24px 80px rgba(0,0,0,.7)',overflow:'hidden'}} onClick={e=>e.stopPropagation()}>
+        {/* 헤더 */}
+        <div style={{padding:'20px 24px 16px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,fontWeight:700,color:'var(--text-muted)',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:6}}>미션 라우팅 보고서</div>
+              <div style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',lineHeight:1.5,marginBottom:8}}>{mission.task}</div>
+              {mission.data?.summary && (
+                <div style={{fontSize:12,color:'var(--text-secondary)',lineHeight:1.6,padding:'8px 12px',background:'var(--bg-elevated)',borderRadius:5,borderLeft:'3px solid var(--accent)'}}>
+                  {mission.data.summary}
+                </div>
+              )}
+            </div>
+            <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:18,padding:'0 4px',flexShrink:0,lineHeight:1}} onMouseOver={e=>e.currentTarget.style.color='var(--text-primary)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>✕</button>
+          </div>
+          <div style={{display:'flex',gap:16,marginTop:14}}>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}><span style={{fontWeight:600,color:'var(--text-secondary)'}}>참여 조직</span> {routing.length}개</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}><span style={{fontWeight:600,color:'var(--text-secondary)'}}>실행 방식</span> 병렬 처리</div>
+          </div>
+        </div>
+        {/* 조직별 계획 */}
+        <div style={{overflowY:'auto',flex:1,padding:'20px 24px'}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 420px), 1fr))',gap:12}}>
+            {routing.map((r: any, i: number) => {
+              const isExpanded = expandedCards.has(i);
+              return (
+                <div key={i} style={{border:'1px solid var(--border)',borderRadius:7,overflow:'hidden',borderTop:`3px solid ${orgColor(r.org_type)}`}}>
+                  <div onClick={()=>toggleCard(i)} style={{padding:'10px 14px',background:'var(--bg-elevated)',display:'flex',alignItems:'flex-start',gap:8,cursor:'pointer'}}
+                    onMouseOver={e=>e.currentTarget.style.background='var(--bg-hover)'} onMouseOut={e=>e.currentTarget.style.background='var(--bg-elevated)'}>
+                    <div style={{width:7,height:7,borderRadius:'50%',background:orgColor(r.org_type),flexShrink:0,marginTop:4}} />
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:2}}>{r.org_name}</div>
+                      <div style={{fontSize:10,color:'var(--text-muted)',marginBottom:4}}>담당: {r.agent_name} · {r.org_type==='division'?'부문':r.org_type==='department'?'실':'팀'}</div>
+                      <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.5,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:isExpanded?'unset':2,WebkitBoxOrient:'vertical'}}>{r.subtask}</div>
+                    </div>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,flexShrink:0}}>
+                      <div style={{fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:10,background:orgColor(r.org_type)+'22',color:orgColor(r.org_type),border:`1px solid ${orgColor(r.org_type)}44`}}>{i+1}/{routing.length}</div>
+                      <div style={{fontSize:11,color:'var(--text-muted)',transition:'transform 0.2s',transform:isExpanded?'rotate(180deg)':'none'}}>▼</div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div style={{padding:'12px 14px',display:'flex',flexDirection:'column',gap:10,borderTop:'1px solid var(--border)',background:'var(--bg-panel)'}}>
+                      {r.approach && (
+                        <div>
+                          <div style={{fontSize:9,fontWeight:700,color:'var(--text-muted)',letterSpacing:'0.07em',textTransform:'uppercase',marginBottom:4}}>수행 방식</div>
+                          <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}}>{r.approach}</div>
+                        </div>
+                      )}
+                      {r.deliverables?.length > 0 && (
+                        <div>
+                          <div style={{fontSize:9,fontWeight:700,color:'var(--text-muted)',letterSpacing:'0.07em',textTransform:'uppercase',marginBottom:4}}>산출물</div>
+                          <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                            {r.deliverables.map((d: string, j: number) => (
+                              <div key={j} style={{display:'flex',alignItems:'flex-start',gap:5,fontSize:11,color:'var(--text-secondary)',lineHeight:1.5}}>
+                                <span style={{color:orgColor(r.org_type),flexShrink:0,marginTop:1}}>▸</span><span>{d}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* 푸터 */}
+        <div style={{padding:'14px 24px',borderTop:'1px solid var(--border)',display:'flex',gap:8,flexShrink:0,background:'var(--bg-elevated)'}}>
+          <button onClick={onClose} style={{flex:1,fontSize:12,fontWeight:500,color:'var(--text-secondary)',background:'none',border:'1px solid var(--border)',padding:'9px',borderRadius:5,cursor:'pointer',fontFamily:'inherit'}}>닫기</button>
+          <button onClick={onRun} style={{flex:2,fontSize:12,fontWeight:700,color:'#fff',background:'var(--success)',border:'none',padding:'9px',borderRadius:5,cursor:'pointer',fontFamily:'inherit'}}>▶ 미션 실행</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -643,15 +986,21 @@ type SelectAgent = (a: Agent) => void;
 // ─────────────────────────────────────────────────────────────────────
 
 /** 탑뷰 에이전트 데스크 — 스프라이트 + 책상 + 네임태그 */
-function AgentDesk({ a, onSelect }: { a: Agent; onSelect: SelectAgent }) {
+function AgentDesk({ a, onSelect, isRunning }: { a: Agent; onSelect: SelectAgent; isRunning?: boolean }) {
   const isLead = a.is_lead === 1;
   const lvl = agentLevelLabel(a.org_level, a.is_lead);
-  return (
+  const glowColor = a.color || '#0d99ff';
+  const desk = (
     <div
       className="agent-desk"
       onClick={() => onSelect(a)}
-      title={`${a.name} — ${lvl}`}
+      title={`${a.name} — ${lvl}${isRunning ? ' (작업 중)' : ''}`}
     >
+      {/* 작업 중 뱃지 */}
+      {isRunning && (
+        <div className="agent-working-badge" style={{ background: glowColor }} />
+      )}
+
       {/* LEAD 배지 */}
       {isLead && (
         <div style={{
@@ -678,12 +1027,28 @@ function AgentDesk({ a, onSelect }: { a: Agent; onSelect: SelectAgent }) {
         borderBottom:`2px solid ${isLead ? a.color+'99' : '#202020'}`,
         borderRadius:2,
         display:'flex',alignItems:'center',justifyContent:'center',gap:3,
-        boxShadow:'0 2px 6px rgba(0,0,0,0.5)',
+        boxShadow: isRunning
+          ? `0 2px 6px rgba(0,0,0,0.5), 0 0 8px ${glowColor}88`
+          : '0 2px 6px rgba(0,0,0,0.5)',
         position:'relative',
         flexShrink:0,
       }}>
-        {/* 모니터 */}
-        <div style={{width:16,height:11,background:'#0d1117',border:`1px solid ${a.color}66`,borderRadius:1,boxShadow:`0 0 4px ${a.color}44`}} />
+        {/* 모니터 — 작업 중이면 밝게 */}
+        <div style={{
+          width:16,height:11,
+          background: isRunning ? '#1a2a3a' : '#0d1117',
+          border:`1px solid ${a.color}${isRunning ? 'cc' : '66'}`,
+          borderRadius:1,
+          boxShadow:`0 0 ${isRunning ? '8px' : '4px'} ${a.color}${isRunning ? '99' : '44'}`,
+          display:'flex',alignItems:'center',justifyContent:'center',gap:1,
+          overflow:'hidden',
+        }}>
+          {isRunning && <>
+            <span className="agent-typing-dot" style={{color:a.color}} />
+            <span className="agent-typing-dot" style={{color:a.color}} />
+            <span className="agent-typing-dot" style={{color:a.color}} />
+          </>}
+        </div>
         {/* 키보드 */}
         <div style={{width:11,height:5,background:'#282828',border:'1px solid #3a3a3a',borderRadius:1}} />
       </div>
@@ -692,19 +1057,30 @@ function AgentDesk({ a, onSelect }: { a: Agent; onSelect: SelectAgent }) {
       <div style={{
         marginTop:4,
         fontSize:8,fontWeight:isLead?700:500,
-        color:isLead?a.color:'var(--text-muted)',
+        color: isRunning ? glowColor : (isLead ? a.color : 'var(--text-muted)'),
         textAlign:'center',
         maxWidth:72,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
         letterSpacing:'0.02em',lineHeight:1.3,
+        textShadow: isRunning ? `0 0 6px ${glowColor}` : 'none',
       }}>
         {a.emoji} {a.name}
       </div>
     </div>
   );
+
+  if (!isRunning) return desk;
+  return (
+    <div
+      className="agent-desk-running-wrap"
+      style={{ ['--glow-color' as any]: glowColor, padding: 4, margin: -4 }}
+    >
+      {desk}
+    </div>
+  );
 }
 
 /** 파트 구역 */
-function PartZone({ part, onSelect }: { part: Part; onSelect: SelectAgent }) {
+function PartZone({ part, onSelect, runningAgentIds }: { part: Part; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
   const agents = [part.lead, ...part.workers].filter(Boolean) as Agent[];
   if (agents.length === 0) return null;
   return (
@@ -721,48 +1097,53 @@ function PartZone({ part, onSelect }: { part: Part; onSelect: SelectAgent }) {
         background:'#14141a',padding:'0 6px',letterSpacing:'0.08em',
       }}>◆ {part.name}</div>
       <div style={{display:'flex',flexWrap:'wrap',gap:16,justifyContent:'center'}}>
-        {agents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} />)}
+        {agents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
       </div>
     </div>
   );
 }
 
 /** 팀 구역 (방 안의 작업 공간) */
-function TeamZone({ team, onSelect }: { team: Team; onSelect: SelectAgent }) {
+function TeamZone({ team, onSelect, runningAgentIds }: { team: Team; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
   const directAgents = [team.lead, ...team.workers].filter(Boolean) as Agent[];
   const hasParts = team.parts.length > 0;
+  const teamHasRunning = directAgents.some(a => runningAgentIds.has(a.id))
+    || team.parts.some(p => [p.lead, ...p.workers].filter(Boolean).some((a: any) => runningAgentIds.has(a.id)));
 
   return (
     <div style={{
       position:'relative',
-      border:`1px dashed ${team.color}77`,
+      border:`1px dashed ${teamHasRunning ? team.color+'cc' : team.color+'77'}`,
       borderRadius:4,
       padding:'20px 12px 12px',
-      background:`${team.color}0a`,
-      boxShadow:`inset 0 0 20px ${team.color}08`,
+      background: teamHasRunning ? `${team.color}18` : `${team.color}0a`,
+      boxShadow: teamHasRunning
+        ? `inset 0 0 20px ${team.color}18, 0 0 12px ${team.color}22`
+        : `inset 0 0 20px ${team.color}08`,
       minWidth:110,
+      transition:'all 0.5s ease',
     }}>
       {/* 팀 표지판 */}
       <div style={{
         position:'absolute',top:-1,left:8,
         fontSize:8,fontWeight:700,color:team.color,
         background:'#14141a',padding:'1px 8px',
-        border:`1px solid ${team.color}44`,borderRadius:2,
+        border:`1px solid ${team.color}${teamHasRunning ? '88' : '44'}`,borderRadius:2,
         letterSpacing:'0.05em',whiteSpace:'nowrap',
-      }}>▸ {team.name}</div>
+      }}>▸ {team.name}{teamHasRunning ? ' ⚡' : ''}</div>
 
       {hasParts ? (
         <div style={{display:'flex',flexDirection:'column',gap:10}}>
           {directAgents.length > 0 && (
             <div style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'center'}}>
-              {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} />)}
+              {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
             </div>
           )}
-          {team.parts.map(p => <PartZone key={p.id} part={p} onSelect={onSelect} />)}
+          {team.parts.map(p => <PartZone key={p.id} part={p} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
         </div>
       ) : (
         <div style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'center'}}>
-          {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} />)}
+          {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
           {directAgents.length === 0 && <div style={{fontSize:9,color:'var(--text-muted)',padding:'8px 4px'}}>에이전트 없음</div>}
         </div>
       )}
@@ -771,21 +1152,22 @@ function TeamZone({ team, onSelect }: { team: Team; onSelect: SelectAgent }) {
 }
 
 /** 실 (Department) 방 */
-function DeptRoom({ dept, onSelect }: { dept: Dept; onSelect: SelectAgent }) {
+function DeptRoom({ dept, onSelect, runningAgentIds }: { dept: Dept; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
+  const leadRunning = !!(dept.lead && runningAgentIds.has(dept.lead.id));
   return (
     <div style={{
       position:'relative',
-      border:'2px solid #3a3a46',
+      border: leadRunning ? '2px solid #5a5a76' : '2px solid #3a3a46',
       borderRadius:5,
       background:'#1a1a22',
       padding:'30px 14px 14px',
       minWidth:160,
-      // 타일 바닥
       backgroundImage:`
         repeating-linear-gradient(0deg,transparent,transparent 15px,rgba(255,255,255,0.014) 15px,rgba(255,255,255,0.014) 16px),
         repeating-linear-gradient(90deg,transparent,transparent 15px,rgba(255,255,255,0.014) 15px,rgba(255,255,255,0.014) 16px)
       `,
       boxShadow:'inset 0 0 40px rgba(0,0,0,0.3)',
+      transition:'border-color 0.4s',
     }}>
       {/* 문 표시판 */}
       <div style={{
@@ -806,13 +1188,13 @@ function DeptRoom({ dept, onSelect }: { dept: Dept; onSelect: SelectAgent }) {
           border:'1px solid rgba(255,255,255,0.06)',
           borderRadius:3,
         }}>
-          <AgentDesk a={dept.lead} onSelect={onSelect} />
+          <AgentDesk a={dept.lead} onSelect={onSelect} isRunning={leadRunning} />
         </div>
       )}
 
       {/* 팀 구역들 */}
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
-        {dept.teams.map(t => <TeamZone key={t.id} team={t} onSelect={onSelect} />)}
+        {dept.teams.map(t => <TeamZone key={t.id} team={t} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
         {dept.teams.length === 0 && !dept.lead && (
           <div style={{fontSize:9,color:'var(--text-muted)',padding:'12px 8px',fontStyle:'italic'}}>팀 없음</div>
         )}
@@ -822,7 +1204,8 @@ function DeptRoom({ dept, onSelect }: { dept: Dept; onSelect: SelectAgent }) {
 }
 
 /** 부문 (Division) 대형 룸 */
-function DivisionRoom({ div, onSelect }: { div: Div; onSelect: SelectAgent }) {
+function DivisionRoom({ div, onSelect, runningAgentIds }: { div: Div; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
+  const leadRunning = !!(div.lead && runningAgentIds.has(div.lead.id));
   return (
     <div style={{
       position:'relative',
@@ -835,7 +1218,6 @@ function DivisionRoom({ div, onSelect }: { div: Div; onSelect: SelectAgent }) {
         0 4px 32px ${div.color}18,
         inset 0 0 80px rgba(0,0,0,0.25)
       `,
-      // 부문 바닥 타일 (색상 틴트)
       backgroundImage:`
         repeating-linear-gradient(0deg,transparent,transparent 63px,${div.color}0a 63px,${div.color}0a 64px),
         repeating-linear-gradient(90deg,transparent,transparent 63px,${div.color}0a 63px,${div.color}0a 64px)
@@ -859,13 +1241,16 @@ function DivisionRoom({ div, onSelect }: { div: Div; onSelect: SelectAgent }) {
         {div.lead && (
           <div style={{
             position:'relative',
-            border:`1px solid ${div.color}55`,
+            border:`1px solid ${div.color}${leadRunning ? 'aa' : '55'}`,
             borderRadius:5,
             padding:'22px 14px 12px',
-            background:`${div.color}14`,
+            background:`${div.color}${leadRunning ? '22' : '14'}`,
             display:'flex',justifyContent:'center',alignItems:'center',
             minWidth:90,
-            boxShadow:`inset 0 0 20px ${div.color}08`,
+            boxShadow: leadRunning
+              ? `inset 0 0 20px ${div.color}18, 0 0 16px ${div.color}33`
+              : `inset 0 0 20px ${div.color}08`,
+            transition:'all 0.4s',
           }}>
             <div style={{
               position:'absolute',top:-1,left:6,
@@ -873,12 +1258,12 @@ function DivisionRoom({ div, onSelect }: { div: Div; onSelect: SelectAgent }) {
               background:'#14141a',padding:'0 7px',
               letterSpacing:'0.1em',
             }}>DIRECTOR</div>
-            <AgentDesk a={div.lead} onSelect={onSelect} />
+            <AgentDesk a={div.lead} onSelect={onSelect} isRunning={leadRunning} />
           </div>
         )}
 
         {/* 실 방들 */}
-        {div.departments.map(d => <DeptRoom key={d.id} dept={d} onSelect={onSelect} />)}
+        {div.departments.map(d => <DeptRoom key={d.id} dept={d} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
 
         {div.departments.length === 0 && !div.lead && (
           <div style={{fontSize:10,color:'var(--text-muted)',padding:'24px',fontStyle:'italic'}}>

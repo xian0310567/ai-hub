@@ -3,14 +3,129 @@ import { Missions, Divisions, Workspaces, Teams, Parts, Agents, Notifications } 
 import { getSession } from '@/lib/auth';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+// ── 상수 및 타입 ──────────────────────────────────────────────────────
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_IMAGE_COUNT = 5;
+const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+
+interface ImageMetadata {
+  path: string;
+  filename: string;
+  size: number;
+}
 
 // GET /api/missions — 미션 목록
 export async function GET(req: NextRequest) {
   const user = getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const missions = Missions.list(user.id);
+  const missions = Missions.list(user.id).map(m => ({
+    ...m,
+    images: m.images ? JSON.parse(m.images) : [],
+  }));
   return Response.json({ ok: true, missions });
+}
+
+// ── 이미지 처리 유틸리티 ─────────────────────────────────────────────
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+}
+
+function detectMimeType(base64Data: string): string | null {
+  const signatures: Record<string, string> = {
+    '/9j/': 'image/jpeg',
+    'iVBORw0KGgo': 'image/png',
+    'R0lGOD': 'image/gif',
+    'UklGR': 'image/webp',
+  };
+
+  for (const [sig, mime] of Object.entries(signatures)) {
+    if (base64Data.startsWith(sig)) return mime;
+  }
+  return null;
+}
+
+async function saveImages(
+  userId: string,
+  missionId: string,
+  images: string[]
+): Promise<ImageMetadata[]> {
+  if (images.length > MAX_IMAGE_COUNT) {
+    throw new Error(`최대 ${MAX_IMAGE_COUNT}개의 이미지만 업로드할 수 있습니다`);
+  }
+
+  // 경로 탐색 공격 방지 - userId와 missionId 검증
+  if (!userId || userId.includes('..') || userId.includes('/') || userId.includes('\\')) {
+    throw new Error('잘못된 사용자 ID입니다');
+  }
+  if (!missionId || missionId.includes('..') || missionId.includes('/') || missionId.includes('\\')) {
+    throw new Error('잘못된 미션 ID입니다');
+  }
+
+  const imagesDir = path.join(
+    process.env.DATA_DIR || path.join(process.cwd(), '.data'),
+    'users',
+    userId,
+    'missions',
+    missionId,
+    'images'
+  );
+
+  if (!fs.existsSync(imagesDir)) {
+    fs.mkdirSync(imagesDir, { recursive: true });
+  }
+
+  const savedImages: ImageMetadata[] = [];
+  const timestamp = Date.now();
+
+  for (let i = 0; i < images.length; i++) {
+    let base64Data = images[i];
+
+    // data:image/png;base64, 형식 처리
+    const dataUrlMatch = base64Data.match(/^data:([^;]+);base64,(.+)$/);
+    let mimeType: string | null = null;
+
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      base64Data = dataUrlMatch[2];
+    } else {
+      // MIME 타입 감지
+      mimeType = detectMimeType(base64Data);
+    }
+
+    if (!mimeType || !ALLOWED_MIME_TYPES.includes(mimeType)) {
+      throw new Error(`지원하지 않는 이미지 형식입니다. 허용 형식: ${ALLOWED_MIME_TYPES.join(', ')}`);
+    }
+
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    if (buffer.length > MAX_IMAGE_SIZE) {
+      throw new Error(`이미지 크기는 ${MAX_IMAGE_SIZE / 1024 / 1024}MB를 초과할 수 없습니다`);
+    }
+
+    const ext = MIME_TO_EXT[mimeType];
+    const filename = sanitizeFilename(`${timestamp}_${i}.${ext}`);
+    const filepath = path.join(imagesDir, filename);
+
+    fs.writeFileSync(filepath, buffer);
+
+    savedImages.push({
+      path: filepath,
+      filename,
+      size: buffer.length,
+    });
+  }
+
+  return savedImages;
 }
 
 // POST /api/missions — 미션 생성 (즉시 응답 + 백그라운드 라우팅 분석)
@@ -18,8 +133,22 @@ export async function POST(req: NextRequest) {
   const user = getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const { task } = await req.json() as { task: string };
+  const body = await req.json() as { task: string; images?: string[] };
+  const { task, images = [] } = body;
   if (!task?.trim()) return Response.json({ ok: false, error: '미션 설명을 입력하세요' }, { status: 400 });
+
+  // 이미지 유효성 검증 및 저장
+  let savedImages: ImageMetadata[] = [];
+  const id = randomUUID();
+
+  try {
+    if (images.length > 0) {
+      savedImages = await saveImages(user.id, id, images);
+    }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : '이미지 저장 중 오류가 발생했습니다';
+    return Response.json({ ok: false, error: errorMsg }, { status: 400 });
+  }
 
   // 현재 조직도 구축
   const orgChart = buildOrgChart(user.id);
@@ -28,14 +157,13 @@ export async function POST(req: NextRequest) {
   }
 
   // 미션 레코드 즉시 생성 (status: 'analyzing')
-  const id = randomUUID();
   Missions.create({ id, user_id: user.id, task, routing: '[]' });
-  Missions.update(id, { status: 'analyzing' });
+  Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
 
   // 즉시 응답 — 클라이언트는 폴링으로 결과 수신
   const response = Response.json({
     ok: true,
-    mission: { id, task, status: 'analyzing' },
+    mission: { id, task, status: 'analyzing', images: savedImages },
   });
 
   // 백그라운드에서 Claude CLI 라우팅 분석
@@ -43,10 +171,19 @@ export async function POST(req: NextRequest) {
   const anyDiv = Divisions.list(user.id)[0];
   const cwd = anyWs?.path || anyDiv?.ws_path || process.cwd();
 
-  const prompt = buildRoutingPrompt(orgChart, task);
+  const hasImages = savedImages.length > 0;
+  const prompt = buildRoutingPrompt(orgChart, task, hasImages);
+
+  // Claude CLI 인자 구성: 프롬프트 + 이미지 파일 경로들
+  const args = ['-p', prompt];
+  if (hasImages) {
+    savedImages.forEach(img => {
+      args.push(img.path);
+    });
+  }
 
   setImmediate(() => {
-    execFile('claude', ['-p', prompt], {
+    execFile('claude', args, {
       cwd,
       encoding: 'utf8',
       timeout: 90000,
@@ -120,14 +257,38 @@ export async function DELETE(req: NextRequest) {
   const m = Missions.get(id);
   if (!m || m.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
 
+  // 이미지 파일 정리
+  const imagesDir = path.join(
+    process.env.DATA_DIR || path.join(process.cwd(), '.data'),
+    'users',
+    user.id,
+    'missions',
+    id,
+    'images'
+  );
+
+  if (fs.existsSync(imagesDir)) {
+    try {
+      // 이미지 디렉토리 및 하위 파일 모두 삭제
+      fs.rmSync(imagesDir, { recursive: true, force: true });
+    } catch (err) {
+      // 파일 삭제 실패 시 로그만 남기고 계속 진행
+      console.error(`이미지 디렉토리 삭제 실패 (mission_id: ${id}):`, err);
+    }
+  }
+
   Missions.delete(id);
   return Response.json({ ok: true });
 }
 
 // ── 라우팅 프롬프트 생성 ────────────────────────────────────────────
-function buildRoutingPrompt(orgChart: string, task: string): string {
-  return `당신은 AI 조직의 미션 라우터입니다. 사용자의 업무 요청을 분석하고 어떤 조직/팀에 어떤 업무를 배정할지 결정합니다.
+function buildRoutingPrompt(orgChart: string, task: string, hasImages: boolean): string {
+  const imageNote = hasImages
+    ? "\n\n**첨부된 이미지를 참고하여 미션을 분석하세요.** 이미지에 포함된 정보(UI 디자인, 데이터 구조, 에러 메시지 등)를 반영하여 더 구체적인 라우팅을 제공하세요.\n"
+    : "";
 
+  return `당신은 AI 조직의 미션 라우터입니다. 사용자의 업무 요청을 분석하고 어떤 조직/팀에 어떤 업무를 배정할지 결정합니다.
+${imageNote}
 ## 현재 조직도
 ${orgChart}
 
@@ -148,7 +309,9 @@ ${task}
       "org_name": "조직 이름",
       "agent_id": "담당 리더 에이전트 ID",
       "agent_name": "담당 리더 에이전트 이름",
-      "subtask": "이 조직에 배정할 구체적인 업무 설명 (2-4문장)"
+      "subtask": "이 조직에 배정할 업무 요약 (1-2문장)",
+      "approach": "구체적으로 어떻게 수행할지 설명 — 방법론, 단계, 고려사항 포함 (3-5문장)",
+      "deliverables": ["산출물1", "산출물2", "산출물3"]
     }
   ],
   "needs_clarification": false,

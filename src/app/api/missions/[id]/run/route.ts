@@ -122,7 +122,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         send({ type: 'step', idx, status: 'running', org_name: r.org_name, agent_name: r.agent_name });
 
         try {
-          const output = await runAgentTask(r, mission.task);
+          const output = await runAgentTask(r, mission.task, id);
           MissionJobs.finish(jobId, output);
           Tasks.update(taskId, { status: 'done', result: output });
           steps[idx].status = 'done';
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // ── 최종 통합 문서 ──
       send({ type: 'consolidating' });
       try {
-        const finalDoc = await consolidateResults(mission.task, results);
+        const finalDoc = await consolidateResults(mission.task, results, id);
         Missions.update(id, { status: 'done', final_doc: finalDoc, steps: JSON.stringify(steps) });
         send({ type: 'done', final_doc: finalDoc });
       } catch (e: any) {
@@ -193,7 +193,7 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
 const CLAUDE_TIMEOUT = 300_000; // 5분
 const MAX_RETRIES = 2;
 
-async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [], allowTools = false): Promise<string> {
+async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [], allowTools = false, imagePaths: string[] = []): Promise<string> {
   let lastErr: Error | null = null;
 
   const toolArgs = allowTools
@@ -202,7 +202,7 @@ async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [],
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
-      const { stdout } = await execFileAsync('claude', ['-p', prompt, ...toolArgs, ...modelArgs], {
+      const { stdout } = await execFileAsync('claude', ['-p', prompt, ...toolArgs, ...modelArgs, ...imagePaths], {
         cwd,
         encoding: 'utf8',
         timeout: CLAUDE_TIMEOUT,
@@ -230,7 +230,7 @@ async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [],
 }
 
 // ── 에이전트에게 업무 위임 ──────────────────────────────────────────
-async function runAgentTask(r: RoutingEntry, missionTask: string): Promise<string> {
+async function runAgentTask(r: RoutingEntry, missionTask: string, missionId: string): Promise<string> {
   const agent = Agents.get(r.agent_id);
   if (!agent) throw new Error(`에이전트 "${r.agent_name}" 없음`);
 
@@ -246,63 +246,111 @@ async function runAgentTask(r: RoutingEntry, missionTask: string): Promise<strin
   const agentSoul = agent.soul || '';
   const modelArgs = agent.model ? ['--model', agent.model] : [];
 
+  // 미션의 이미지 가져오기
+  const mission = Missions.get(missionId);
+  const imagePaths: string[] = [];
+  if (mission?.images) {
+    try {
+      const imageMetadata = JSON.parse(mission.images);
+      if (Array.isArray(imageMetadata)) {
+        imagePaths.push(...imageMetadata.map((img: any) => img.path).filter(Boolean));
+      }
+    } catch {
+      // 이미지 파싱 실패 시 무시하고 계속 진행
+    }
+  }
+
+  const imageNote = imagePaths.length > 0
+    ? `\n\n**참고: ${imagePaths.length}개의 이미지가 첨부되었습니다.** 이미지에 포함된 정보(UI 디자인, 데이터 구조, 에러 메시지 등)를 반영하여 작업을 수행하세요.\n`
+    : '';
+
   const prompt = `${agentSoul ? `## 당신의 소울\n${agentSoul}\n\n` : ''}## 미션
-전체 미션: ${missionTask}
+전체 미션: ${missionTask}${imageNote}
 
 ## 당신에게 배정된 업무
 ${r.subtask}
 
-## 지시사항
-1. 위 업무를 즉시 수행하세요.
-2. 결과물을 구체적이고 실용적으로 작성하세요.
-3. 마크다운 형식으로 깔끔하게 정리하세요.
-4. 완료 후 "## 결과 요약" 섹션으로 핵심을 정리하세요.
+## 핵심 지시사항
+당신에게는 **Read, Edit, Write, Bash** 도구가 주어져 있습니다.
+**지금 즉시 도구를 사용해서 작업을 직접 완료하세요.**
 
-결과물만 출력하세요 (설명이나 인사말 없이):`;
+### 절대 하지 말 것
+- "다음에 해야 할 일", "향후 진행 방향", "추천 드립니다" 같은 제안만 나열하기
+- 계획서나 로드맵만 작성하고 실제 구현은 안 하기
+- 사용자나 다른 사람에게 뭔가를 해달라고 요청하기
 
-  return await callClaude(prompt, wsPath, modelArgs, true);
+### 반드시 해야 할 것
+1. **Read** 도구로 관련 파일을 먼저 파악하세요
+2. **Edit/Write** 도구로 실제 코드·파일을 직접 수정·생성하세요
+3. **Bash** 도구로 테스트, 빌드, 명령 실행이 필요하면 직접 실행하세요
+4. 모든 작업이 완료된 후 "## 완료된 작업" 섹션에서 실제로 수행한 내용만 간략히 요약하세요
+   (어떤 파일을 어떻게 변경했는지, 어떤 명령을 실행했는지)
+
+지금 바로 시작하세요:`;
+
+  return await callClaude(prompt, wsPath, modelArgs, true, imagePaths);
 }
 
 // ── 최종 통합 문서 생성 ─────────────────────────────────────────────
 async function consolidateResults(
   task: string,
-  results: { org_name: string; agent_name: string; output: string }[]
+  results: { org_name: string; agent_name: string; output: string }[],
+  missionId: string
 ): Promise<string> {
   const resultBlock = results.map((r, i) =>
     `### ${i + 1}. ${r.org_name} (${r.agent_name})\n${r.output}`
   ).join('\n\n---\n\n');
 
+  // 미션의 이미지 가져오기
+  const mission = Missions.get(missionId);
+  const imagePaths: string[] = [];
+  if (mission?.images) {
+    try {
+      const imageMetadata = JSON.parse(mission.images);
+      if (Array.isArray(imageMetadata)) {
+        imagePaths.push(...imageMetadata.map((img: any) => img.path).filter(Boolean));
+      }
+    } catch {
+      // 이미지 파싱 실패 시 무시
+    }
+  }
+
+  const imageNote = imagePaths.length > 0
+    ? `\n\n**참고: 원래 미션에 ${imagePaths.length}개의 이미지가 첨부되었습니다.** 이미지 컨텍스트를 고려하여 최종 보고서를 작성하세요.\n`
+    : '';
+
   const prompt = `당신은 AI 조직의 최종 보고서 작성자입니다.
 
 ## 원래 미션
-${task}
+${task}${imageNote}
 
-## 각 조직의 결과물
+## 각 조직이 완료한 작업
 ${resultBlock}
 
 ## 요청
-위 결과물들을 종합하여 하나의 최종 보고서를 작성해주세요.
+위 결과물들을 종합하여 하나의 최종 완료 보고서를 작성해주세요.
+**중요: 이미 완료된 작업을 정리하는 보고서입니다. "다음 단계", "향후 제언", "추천 드립니다" 같은 미래 계획은 포함하지 마세요.**
 
 보고서 형식:
-# 미션 결과 보고서
+# 미션 완료 보고서
 ## 미션 개요
 (원래 요청 요약)
 
-## 참여 조직
+## 참여 조직 및 담당 업무
 (어떤 조직이 어떤 업무를 맡았는지)
 
-## 진행 결과
+## 완료된 작업
 ### [조직1]
-(핵심 결과 요약)
+(실제로 수행한 작업 내용 요약)
 
 ### [조직2]
-(핵심 결과 요약)
+(실제로 수행한 작업 내용 요약)
 
-## 종합 결론
-(전체를 아우르는 결론 및 다음 단계 제언)
+## 종합 결과
+(전체 작업의 결과물과 현재 상태 요약)
 
 ---
 결과물만 출력 (설명 없이):`;
 
-  return await callClaude(prompt, process.cwd());
+  return await callClaude(prompt, process.cwd(), [], false, imagePaths);
 }

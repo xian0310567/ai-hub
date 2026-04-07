@@ -233,6 +233,23 @@ export default function OrgPage() {
         <span style={{color:'var(--border)'}}>|</span>
         <span style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>조직 관리</span>
         <div style={{marginLeft:'auto',display:'flex',gap:8}}>
+          <button
+            onClick={async () => {
+              if (window.confirm('로그아웃하시겠습니까?')) {
+                try {
+                  await fetch('/api/auth/signout', { method: 'POST' });
+                  router.push('/login');
+                } catch (e) {
+                  alert('로그아웃 실패');
+                }
+              }
+            }}
+            style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',border:'1px solid var(--border)',padding:'5px 14px',borderRadius:4,cursor:'pointer',background:'transparent',fontFamily:'inherit',transition:'all .12s'}}
+            onMouseOver={e=>{e.currentTarget.style.color='var(--danger)';e.currentTarget.style.borderColor='var(--danger)';}}
+            onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}
+          >
+            로그아웃
+          </button>
           <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
           <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
         </div>

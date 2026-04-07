@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
     '*.ngrok.io',
     'localhost',
   ],
+  outputFileTracingExcludes: {
+    '/_global-error': ['**/*'],
+  },
+  skipTrailingSlashRedirect: true,
+  skipMiddlewareUrlNormalize: true,
 };
 
 export default nextConfig;

@@ -1,10 +1,11 @@
 /**
  * Unit tests for requireAuth / requireRole middleware (db/auth.ts)
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { clearDb, seedUser, db } from './helpers/db.js';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { setupTestDb, clearDb, seedUser, q1, newId } from './helpers/db.js';
 import { requireAuth, requireRole } from '../db/auth.js';
-import { newId } from '../db/schema.js';
+import { getPool } from '../db/pool.js';
+import crypto from 'crypto';
 
 // Minimal Fastify-like mock for reply
 function mockReply() {
@@ -24,9 +25,10 @@ function mockRequest(sessionId?: string) {
   } as never;
 }
 
-describe('requireAuth', () => {
-  beforeEach(() => clearDb());
+beforeAll(async () => { await setupTestDb(); });
+beforeEach(async () => { await clearDb(); });
 
+describe('requireAuth', () => {
   it('returns 401 when no cookie', async () => {
     const reply = mockReply();
     await expect(requireAuth(mockRequest(), reply as never)).rejects.toThrow('Unauthorized');
@@ -40,10 +42,13 @@ describe('requireAuth', () => {
   });
 
   it('returns 401 when session is expired', async () => {
-    const { userId } = seedUser();
+    const { userId } = await seedUser();
     const expiredId = newId();
-    const expiredAt = Math.floor(Date.now() / 1000) - 1; // already expired
-    db.prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)').run(expiredId, userId, expiredAt);
+    const expiredAt = Math.floor(Date.now() / 1000) - 1;
+    await getPool().query(
+      'INSERT INTO sessions(id,user_id,expires_at) VALUES($1,$2,$3)',
+      [expiredId, userId, expiredAt],
+    );
 
     const reply = mockReply();
     await expect(requireAuth(mockRequest(expiredId), reply as never)).rejects.toThrow('Unauthorized');
@@ -51,16 +56,18 @@ describe('requireAuth', () => {
   });
 
   it('returns 403 when user has no org membership', async () => {
-    // Create user without org
     const salt = '0'.repeat(32);
-    const crypto = (await import('crypto')).default;
     const hash = crypto.scryptSync('password', salt, 64).toString('hex');
     const userId = newId();
-    db.prepare('INSERT INTO users(id,username,password_hash) VALUES(?,?,?)').run(userId, 'noorg', `${salt}:${hash}`);
+    await getPool().query(
+      'INSERT INTO users(id,username,password_hash) VALUES($1,$2,$3)',
+      [userId, 'noorg', `${salt}:${hash}`],
+    );
 
     const sessionId = newId();
-    db.prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)').run(
-      sessionId, userId, Math.floor(Date.now() / 1000) + 86400
+    await getPool().query(
+      'INSERT INTO sessions(id,user_id,expires_at) VALUES($1,$2,$3)',
+      [sessionId, userId, Math.floor(Date.now() / 1000) + 86400],
     );
 
     const reply = mockReply();
@@ -69,7 +76,7 @@ describe('requireAuth', () => {
   });
 
   it('returns SessionUser for valid session with org', async () => {
-    const { sessionId, userId, orgId } = seedUser({ role: 'team_admin' });
+    const { sessionId, userId, orgId } = await seedUser({ role: 'team_admin' });
     const reply = mockReply();
     const user = await requireAuth(mockRequest(sessionId), reply as never);
 

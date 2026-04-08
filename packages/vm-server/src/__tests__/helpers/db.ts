@@ -1,40 +1,78 @@
 /**
- * Test database helper — clear all tables between tests.
- * Uses the same singleton `db` from schema.ts (shared in singleFork mode).
+ * Test database helper — pg-mem in-memory PostgreSQL for tests.
+ *
+ * Call setupTestDb() once in beforeAll, clearDb() in beforeEach.
+ * seedUser() seeds org + user + session; returns ids and cookie string.
  */
-import { db, newId } from '../../db/schema.js';
+
+import { newDb } from 'pg-mem';
+import { setPool, getPool, newId } from '../../db/pool.js';
+import { initSchema } from '../../db/schema.js';
 import crypto from 'crypto';
 
-export { db };
+export { newId };
 
-/** Wipe all tables in safe FK order */
-export function clearDb(): void {
-  db.pragma('foreign_keys = OFF');
-  db.exec(`
-    DELETE FROM audit_logs;
-    DELETE FROM vault_secrets;
-    DELETE FROM workspace_vaults;
-    DELETE FROM vaults;
-    DELETE FROM schedules;
-    DELETE FROM mission_jobs;
-    DELETE FROM missions;
-    DELETE FROM tasks;
-    DELETE FROM chat_logs;
-    DELETE FROM notifications;
-    DELETE FROM team_members;
-    DELETE FROM parts;
-    DELETE FROM agents;
-    DELETE FROM hosts;
-    DELETE FROM teams;
-    DELETE FROM workspaces;
-    DELETE FROM divisions;
-    DELETE FROM org_members;
-    DELETE FROM sessions;
-    DELETE FROM organizations;
-    DELETE FROM users;
-  `);
-  db.pragma('foreign_keys = ON');
+// ── Setup ─────────────────────────────────────────────────────────────────
+
+export async function setupTestDb(): Promise<void> {
+  const mem = newDb();
+  // createPg() returns a pg-compatible { Pool, Client } pair
+  const { Pool } = mem.adapters.createPg();
+  setPool(new Pool() as never);
+  await initSchema();
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/** Direct query helper for test assertions */
+export async function q1<T = Record<string, unknown>>(
+  sql: string, params?: unknown[]
+): Promise<T | undefined> {
+  const { rows } = await getPool().query(sql, params);
+  return rows[0] as T | undefined;
+}
+
+export async function qall<T = Record<string, unknown>>(
+  sql: string, params?: unknown[]
+): Promise<T[]> {
+  const { rows } = await getPool().query(sql, params);
+  return rows as T[];
+}
+
+// ── Clear ─────────────────────────────────────────────────────────────────
+
+const DELETE_ORDER = [
+  'audit_logs',
+  'vault_secrets',
+  'workspace_vaults',
+  'vaults',
+  'schedules',
+  'mission_jobs',
+  'missions',
+  'tasks',
+  'chat_logs',
+  'notifications',
+  'team_members',
+  'parts',
+  'agents',
+  'hosts',
+  'teams',
+  'workspaces',
+  'divisions',
+  'org_members',
+  'sessions',
+  'organizations',
+  'users',
+];
+
+export async function clearDb(): Promise<void> {
+  const pool = getPool();
+  for (const table of DELETE_ORDER) {
+    await pool.query(`DELETE FROM ${table}`);
+  }
+}
+
+// ── Seed ──────────────────────────────────────────────────────────────────
 
 interface SeedResult {
   userId: string;
@@ -43,47 +81,59 @@ interface SeedResult {
   cookie: string;
 }
 
-/** Seed: create org + user + session, return ids and cookie header value */
-export function seedUser(opts: {
+export async function seedUser(opts: {
   username?: string;
   password?: string;
   role?: string;
   orgSlug?: string;
-} = {}): SeedResult {
+} = {}): Promise<SeedResult> {
+  const pool = getPool();
   const username = opts.username ?? 'testuser';
   const role = opts.role ?? 'org_admin';
   const orgSlug = opts.orgSlug ?? 'testorg';
 
   // Create org if not exists
-  let org = db.prepare('SELECT id FROM organizations WHERE slug = ?').get(orgSlug) as { id: string } | undefined;
-  if (!org) {
+  let orgRow = (
+    await pool.query<{ id: string }>('SELECT id FROM organizations WHERE slug = $1', [orgSlug])
+  ).rows[0];
+  if (!orgRow) {
     const orgId = newId();
-    db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run(orgId, 'Test Org', orgSlug);
-    org = { id: orgId };
+    await pool.query(
+      'INSERT INTO organizations(id,name,slug) VALUES($1,$2,$3)',
+      [orgId, 'Test Org', orgSlug],
+    );
+    orgRow = { id: orgId };
   }
 
-  // Create user
+  // Create user (or get existing)
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(opts.password ?? 'password123', salt, 64).toString('hex');
   const userId = newId();
-  db.prepare('INSERT OR IGNORE INTO users(id,username,password_hash) VALUES(?,?,?)').run(
-    userId, username, `${salt}:${hash}`
+  await pool.query(
+    'INSERT INTO users(id,username,password_hash) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+    [userId, username, `${salt}:${hash}`],
   );
-  const user = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: string };
+  const user = (
+    await pool.query<{ id: string }>('SELECT id FROM users WHERE username = $1', [username])
+  ).rows[0];
 
   // Org membership
-  db.prepare('INSERT OR IGNORE INTO org_members(id,org_id,user_id,role) VALUES(?,?,?,?)').run(
-    newId(), org.id, user.id, role
+  await pool.query(
+    'INSERT INTO org_members(id,org_id,user_id,role) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+    [newId(), orgRow.id, user.id, role],
   );
 
-  // Session (30 day)
+  // Session (30 days)
   const sessionId = newId();
   const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 30;
-  db.prepare('INSERT INTO sessions(id,user_id,expires_at) VALUES(?,?,?)').run(sessionId, user.id, expiresAt);
+  await pool.query(
+    'INSERT INTO sessions(id,user_id,expires_at) VALUES($1,$2,$3)',
+    [sessionId, user.id, expiresAt],
+  );
 
   return {
     userId: user.id,
-    orgId: org.id,
+    orgId: orgRow.id,
     sessionId,
     cookie: `session=${sessionId}`,
   };

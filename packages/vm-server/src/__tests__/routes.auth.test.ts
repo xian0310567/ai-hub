@@ -4,22 +4,23 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './helpers/app.js';
-import { clearDb, seedUser, db } from './helpers/db.js';
+import { clearDb, seedUser, q1, newId } from './helpers/db.js';
+import { getPool } from '../db/pool.js';
 
 let app: FastifyInstance;
 
 beforeAll(async () => { app = await buildApp(); });
 afterAll(async () => { await app.close(); });
-beforeEach(() => clearDb());
+beforeEach(async () => { await clearDb(); });
 
 describe('POST /api/auth/signup', () => {
   it('creates a user and returns 201', async () => {
-    // Need an org first
-    seedUser(); clearDb();
-    // re-seed org only
-    const { db: _db, newId } = await import('../db/schema.js');
+    // Pre-seed org
     const orgId = newId();
-    _db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run(orgId, 'Test', 'testorg');
+    await getPool().query(
+      'INSERT INTO organizations(id,name,slug) VALUES($1,$2,$3)',
+      [orgId, 'Test', 'testorg'],
+    );
 
     const res = await app.inject({
       method: 'POST',
@@ -51,7 +52,7 @@ describe('POST /api/auth/signup', () => {
   });
 
   it('returns 409 for duplicate username', async () => {
-    const { orgId } = seedUser({ username: 'dupuser' });
+    await seedUser({ username: 'dupuser' });
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signup',
@@ -64,7 +65,7 @@ describe('POST /api/auth/signup', () => {
 
 describe('POST /api/auth/signin', () => {
   it('returns 200 with session cookie on valid credentials', async () => {
-    seedUser({ username: 'alice', password: 'mypassword' });
+    await seedUser({ username: 'alice', password: 'mypassword' });
 
     const res = await app.inject({
       method: 'POST',
@@ -81,7 +82,7 @@ describe('POST /api/auth/signin', () => {
   });
 
   it('returns 401 for wrong password', async () => {
-    seedUser({ username: 'bob', password: 'rightpass' });
+    await seedUser({ username: 'bob', password: 'rightpass' });
 
     const res = await app.inject({
       method: 'POST',
@@ -104,7 +105,7 @@ describe('POST /api/auth/signin', () => {
 
 describe('GET /api/auth/me', () => {
   it('returns user info for valid session', async () => {
-    const { cookie, userId } = seedUser({ username: 'myuser' });
+    const { cookie, userId } = await seedUser({ username: 'myuser' });
 
     const res = await app.inject({
       method: 'GET',
@@ -127,7 +128,7 @@ describe('GET /api/auth/me', () => {
 
 describe('POST /api/auth/signout', () => {
   it('deletes session and clears cookie', async () => {
-    const { cookie, sessionId } = seedUser({ username: 'signoutuser' });
+    const { cookie, sessionId } = await seedUser({ username: 'signoutuser' });
 
     const res = await app.inject({
       method: 'POST',
@@ -138,7 +139,7 @@ describe('POST /api/auth/signout', () => {
     expect(res.json()).toMatchObject({ ok: true });
 
     // Session should be deleted
-    const row = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    const row = await q1('SELECT id FROM sessions WHERE id = $1', [sessionId]);
     expect(row).toBeUndefined();
   });
 });

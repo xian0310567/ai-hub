@@ -4,17 +4,18 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './helpers/app.js';
-import { clearDb, seedUser, db } from './helpers/db.js';
+import { clearDb, seedUser, q1 } from './helpers/db.js';
+import { getPool } from '../db/pool.js';
 
 let app: FastifyInstance;
 
 beforeAll(async () => { app = await buildApp(); });
 afterAll(async () => { await app.close(); });
-beforeEach(() => clearDb());
+beforeEach(async () => { await clearDb(); });
 
 describe('POST /api/hosts/register', () => {
   it('registers a new host and returns 201', async () => {
-    const { cookie } = seedUser();
+    const { cookie } = await seedUser();
     const res = await app.inject({
       method: 'POST',
       url: '/api/hosts/register',
@@ -26,9 +27,8 @@ describe('POST /api/hosts/register', () => {
   });
 
   it('re-registers existing host: sets status to idle and returns 200', async () => {
-    const { cookie, userId, orgId } = seedUser();
+    const { cookie, userId } = await seedUser();
 
-    // First register
     const first = await app.inject({
       method: 'POST',
       url: '/api/hosts/register',
@@ -37,7 +37,6 @@ describe('POST /api/hosts/register', () => {
     });
     expect(first.statusCode).toBe(201);
 
-    // Register again
     const second = await app.inject({
       method: 'POST',
       url: '/api/hosts/register',
@@ -45,15 +44,17 @@ describe('POST /api/hosts/register', () => {
       payload: { name: 'laptop' },
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json().id).toBe(first.json().id); // same id
+    expect(second.json().id).toBe(first.json().id);
 
-    // DB should have only 1 host
-    const count = (db.prepare('SELECT count(*) as c FROM hosts WHERE user_id = ? AND name = ?').get(userId, 'laptop') as { c: number }).c;
-    expect(count).toBe(1);
+    const rows = await getPool().query(
+      'SELECT count(*) as c FROM hosts WHERE user_id = $1 AND name = $2',
+      [userId, 'laptop'],
+    );
+    expect(Number(rows.rows[0].c)).toBe(1);
   });
 
   it('returns 400 when name is missing', async () => {
-    const { cookie } = seedUser();
+    const { cookie } = await seedUser();
     const res = await app.inject({
       method: 'POST',
       url: '/api/hosts/register',
@@ -75,7 +76,7 @@ describe('POST /api/hosts/register', () => {
 
 describe('POST /api/hosts/:hostId/heartbeat', () => {
   it('updates status and last_heartbeat', async () => {
-    const { cookie, userId, orgId } = seedUser();
+    const { cookie } = await seedUser();
 
     const regRes = await app.inject({
       method: 'POST',
@@ -94,12 +95,12 @@ describe('POST /api/hosts/:hostId/heartbeat', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true });
 
-    const row = db.prepare('SELECT status FROM hosts WHERE id = ?').get(hostId) as { status: string };
-    expect(row.status).toBe('busy');
+    const row = await q1<{ status: string }>('SELECT status FROM hosts WHERE id = $1', [hostId]);
+    expect(row?.status).toBe('busy');
   });
 
   it('returns 404 for unknown host', async () => {
-    const { cookie } = seedUser();
+    const { cookie } = await seedUser();
     const res = await app.inject({
       method: 'POST',
       url: '/api/hosts/nonexistent/heartbeat',
@@ -112,7 +113,7 @@ describe('POST /api/hosts/:hostId/heartbeat', () => {
 
 describe('GET /api/hosts — list org hosts', () => {
   it('returns all hosts for the org', async () => {
-    const { cookie } = seedUser();
+    const { cookie } = await seedUser();
     await app.inject({ method: 'POST', url: '/api/hosts/register', headers: { Cookie: cookie }, payload: { name: 'host-a' } });
     await app.inject({ method: 'POST', url: '/api/hosts/register', headers: { Cookie: cookie }, payload: { name: 'host-b' } });
 
@@ -125,7 +126,7 @@ describe('GET /api/hosts — list org hosts', () => {
   });
 
   it('marks stale hosts as offline', async () => {
-    const { cookie, userId, orgId } = seedUser();
+    const { cookie } = await seedUser();
     const regRes = await app.inject({
       method: 'POST',
       url: '/api/hosts/register',
@@ -136,7 +137,10 @@ describe('GET /api/hosts — list org hosts', () => {
 
     // Set heartbeat to 10 minutes ago (stale)
     const staleTs = Math.floor(Date.now() / 1000) - 600;
-    db.prepare('UPDATE hosts SET last_heartbeat = ?, status = ? WHERE id = ?').run(staleTs, 'idle', hostId);
+    await getPool().query(
+      'UPDATE hosts SET last_heartbeat = $1, status = $2 WHERE id = $3',
+      [staleTs, 'idle', hostId],
+    );
 
     const res = await app.inject({ method: 'GET', url: '/api/hosts', headers: { Cookie: cookie } });
     expect(res.statusCode).toBe(200);

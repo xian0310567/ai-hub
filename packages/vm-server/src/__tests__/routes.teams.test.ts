@@ -4,26 +4,31 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './helpers/app.js';
-import { clearDb, seedUser, db } from './helpers/db.js';
-import { newId } from '../db/schema.js';
+import { clearDb, seedUser, q1, newId } from './helpers/db.js';
+import { getPool } from '../db/pool.js';
 
 let app: FastifyInstance;
 
 beforeAll(async () => { app = await buildApp(); });
 afterAll(async () => { await app.close(); });
-beforeEach(() => clearDb());
+beforeEach(async () => { await clearDb(); });
 
-async function createWorkspace(cookie: string, orgId: string) {
-  // Workspaces require a division first
+async function createWorkspace(orgId: string) {
   const divId = newId();
   const wsId = newId();
-  db.prepare('INSERT INTO divisions(id,org_id,name,ws_path) VALUES(?,?,?,?)').run(divId, orgId, 'Div', '/tmp');
-  db.prepare('INSERT INTO workspaces(id,org_id,division_id,name,path) VALUES(?,?,?,?,?)').run(wsId, orgId, divId, 'WS', '/tmp/ws');
+  await getPool().query(
+    'INSERT INTO divisions(id,org_id,name,ws_path) VALUES($1,$2,$3,$4)',
+    [divId, orgId, 'Div', '/tmp'],
+  );
+  await getPool().query(
+    'INSERT INTO workspaces(id,org_id,division_id,name,path) VALUES($1,$2,$3,$4,$5)',
+    [wsId, orgId, divId, 'WS', '/tmp/ws'],
+  );
   return wsId;
 }
 
 async function createTeam(cookie: string, orgId: string, name = 'Dev Team') {
-  const wsId = await createWorkspace(cookie, orgId);
+  const wsId = await createWorkspace(orgId);
   return app.inject({
     method: 'POST',
     url: '/api/teams',
@@ -34,20 +39,20 @@ async function createTeam(cookie: string, orgId: string, name = 'Dev Team') {
 
 describe('POST /api/teams — create team', () => {
   it('org_admin can create team (201)', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
     const res = await createTeam(cookie, orgId);
     expect(res.statusCode).toBe(201);
     expect(res.json().name).toBe('Dev Team');
   });
 
   it('team_admin can create team (201)', async () => {
-    const { cookie, orgId } = seedUser({ role: 'team_admin' });
+    const { cookie, orgId } = await seedUser({ role: 'team_admin' });
     const res = await createTeam(cookie, orgId);
     expect(res.statusCode).toBe(201);
   });
 
   it('member is forbidden (403)', async () => {
-    const { cookie, orgId } = seedUser({ role: 'member' });
+    const { cookie, orgId } = await seedUser({ role: 'member' });
     const res = await createTeam(cookie, orgId);
     expect(res.statusCode).toBe(403);
   });
@@ -55,7 +60,7 @@ describe('POST /api/teams — create team', () => {
 
 describe('GET /api/teams — list teams', () => {
   it('returns teams for the org', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
     await createTeam(cookie, orgId, 'Team A');
     await createTeam(cookie, orgId, 'Team B');
 
@@ -68,13 +73,13 @@ describe('GET /api/teams — list teams', () => {
 
 describe('GET /api/teams/:id — single team', () => {
   it('returns 404 for unknown team', async () => {
-    const { cookie } = seedUser({ role: 'org_admin' });
+    const { cookie } = await seedUser({ role: 'org_admin' });
     const res = await app.inject({ method: 'GET', url: '/api/teams/nope', headers: { Cookie: cookie } });
     expect(res.statusCode).toBe(404);
   });
 
   it('returns team details', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
     const teamRes = await createTeam(cookie, orgId, 'MyTeam');
     const teamId = teamRes.json().id;
 
@@ -86,7 +91,7 @@ describe('GET /api/teams/:id — single team', () => {
 
 describe('DELETE /api/teams — delete team (body: {id})', () => {
   it('org_admin can delete a team', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
     const teamRes = await createTeam(cookie, orgId);
     const teamId = teamRes.json().id;
 
@@ -97,12 +102,13 @@ describe('DELETE /api/teams — delete team (body: {id})', () => {
       payload: { id: teamId },
     });
     expect(res.statusCode).toBe(200);
-    expect(db.prepare('SELECT id FROM teams WHERE id = ?').get(teamId)).toBeUndefined();
+    const row = await q1('SELECT id FROM teams WHERE id = $1', [teamId]);
+    expect(row).toBeUndefined();
   });
 
   it('member cannot delete (403)', async () => {
-    const { cookie: adminCookie, orgId } = seedUser({ role: 'org_admin' });
-    const { cookie: memberCookie } = seedUser({ role: 'member', username: 'memb3' });
+    const { cookie: adminCookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { cookie: memberCookie } = await seedUser({ role: 'member', username: 'memb3' });
     const teamRes = await createTeam(adminCookie, orgId);
     const teamId = teamRes.json().id;
 
@@ -118,8 +124,8 @@ describe('DELETE /api/teams — delete team (body: {id})', () => {
 
 describe('POST /api/teams/:id/members — add member', () => {
   it('org_admin can add a member', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
-    const { userId: newUserId } = seedUser({ role: 'member', username: 'newmember' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { userId: newUserId } = await seedUser({ role: 'member', username: 'newmember' });
     const teamRes = await createTeam(cookie, orgId);
     const teamId = teamRes.json().id;
 
@@ -131,14 +137,13 @@ describe('POST /api/teams/:id/members — add member', () => {
     });
     expect(res.statusCode).toBe(200);
 
-    const row = db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, newUserId);
+    const row = await q1('SELECT * FROM team_members WHERE team_id = $1 AND user_id = $2', [teamId, newUserId]);
     expect(row).toBeDefined();
   });
 
   it('non-admin can still add members (route has no RBAC guard)', async () => {
-    // The route just inserts with no role check; tests the happy path for members route
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
-    const { userId: targetId } = seedUser({ role: 'member', username: 'target1' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { userId: targetId } = await seedUser({ role: 'member', username: 'target1' });
     const teamRes = await createTeam(cookie, orgId);
     const teamId = teamRes.json().id;
 
@@ -154,12 +159,11 @@ describe('POST /api/teams/:id/members — add member', () => {
 
 describe('DELETE /api/teams/:id/members/:userId', () => {
   it('removes a member from team', async () => {
-    const { cookie, orgId } = seedUser({ role: 'org_admin' });
-    const { userId: memberId } = seedUser({ role: 'member', username: 'removeme' });
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { userId: memberId } = await seedUser({ role: 'member', username: 'removeme' });
     const teamRes = await createTeam(cookie, orgId);
     const teamId = teamRes.json().id;
 
-    // Add member
     await app.inject({
       method: 'POST',
       url: `/api/teams/${teamId}/members`,
@@ -174,7 +178,7 @@ describe('DELETE /api/teams/:id/members/:userId', () => {
     });
     expect(res.statusCode).toBe(200);
 
-    const row = db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, memberId);
+    const row = await q1('SELECT * FROM team_members WHERE team_id = $1 AND user_id = $2', [teamId, memberId]);
     expect(row).toBeUndefined();
   });
 });

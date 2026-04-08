@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { db, newId } from '../db/schema.js';
-import { requireAuth } from '../db/auth.js';
+import { requireAuth, requireRole } from '../db/auth.js';
 
 export async function agentRoutes(app: FastifyInstance) {
   app.get('/', async (req, reply) => {
@@ -25,6 +25,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const { workspace_id, team_id, part_id, parent_agent_id, org_level, is_lead,
             name, emoji, color, soul, command_name, harness_pattern, model } = req.body as {
       workspace_id?: string; team_id?: string; part_id?: string; parent_agent_id?: string;
@@ -46,6 +47,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const body = req.body as Record<string, unknown>;
     const { id } = body;
     if (!id) return reply.code(400).send({ error: 'id required' });
@@ -64,6 +66,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.delete('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const { id } = req.body as { id: string };
     db.prepare('DELETE FROM agents WHERE id = ? AND org_id = ?').run(id, user.orgId);
     return { ok: true };

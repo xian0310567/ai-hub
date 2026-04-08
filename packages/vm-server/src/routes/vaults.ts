@@ -111,6 +111,32 @@ export async function vaultRoutes(app: FastifyInstance) {
     return reply.code(201).send({ ok: true, key_name });
   });
 
+  // Vault 메타데이터 수정
+  app.patch('/:vaultId', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
+    const { vaultId } = req.params as { vaultId: string };
+    const { name, description, expires_at } = req.body as { name?: string; description?: string; expires_at?: number | null };
+
+    const vault = db.prepare('SELECT id FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId);
+    if (!vault) return reply.code(404).send({ error: 'Vault not found' });
+
+    if (name !== undefined) db.prepare('UPDATE vaults SET name = ? WHERE id = ?').run(name, vaultId);
+    if (description !== undefined) db.prepare('UPDATE vaults SET description = ? WHERE id = ?').run(description, vaultId);
+    if (expires_at !== undefined) db.prepare('UPDATE vaults SET expires_at = ? WHERE id = ?').run(expires_at, vaultId);
+
+    return db.prepare('SELECT id,org_id,scope,team_id,name,description,expires_at,created_at FROM vaults WHERE id = ?').get(vaultId);
+  });
+
+  // Vault 삭제
+  app.delete('/:vaultId', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
+    const { vaultId } = req.params as { vaultId: string };
+    db.prepare('DELETE FROM vaults WHERE id = ? AND org_id = ?').run(vaultId, user.orgId);
+    return { ok: true };
+  });
+
   // 시크릿 키 목록 조회 (값은 마스킹)
   app.get('/:vaultId/secrets', async (req, reply) => {
     const user = await requireAuth(req, reply);
@@ -120,6 +146,19 @@ export async function vaultRoutes(app: FastifyInstance) {
     if (!vault) return reply.code(404).send({ error: 'Vault not found' });
 
     return db.prepare('SELECT id, key_name, created_at, updated_at FROM vault_secrets WHERE vault_id = ? ORDER BY key_name').all(vaultId);
+  });
+
+  // 시크릿 삭제
+  app.delete('/:vaultId/secrets/:secretId', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
+    const { vaultId, secretId } = req.params as { vaultId: string; secretId: string };
+
+    const vault = db.prepare('SELECT id FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId);
+    if (!vault) return reply.code(404).send({ error: 'Vault not found' });
+
+    db.prepare('DELETE FROM vault_secrets WHERE id = ? AND vault_id = ?').run(secretId, vaultId);
+    return { ok: true };
   });
 
   // 시크릿 Lease (데몬이 작업 실행 시 호출)

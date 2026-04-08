@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { db, newId } from '../db/schema.js';
-import { requireAuth } from '../db/auth.js';
+import { requireAuth, requireRole } from '../db/auth.js';
 
 export async function divisionRoutes(app: FastifyInstance) {
   app.get('/', async (req, reply) => {
@@ -10,6 +10,7 @@ export async function divisionRoutes(app: FastifyInstance) {
 
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { name, color, ws_path } = req.body as { name: string; color?: string; ws_path?: string };
     if (!name) return reply.code(400).send({ error: 'name required' });
 
@@ -30,6 +31,7 @@ export async function divisionRoutes(app: FastifyInstance) {
 
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { id, name, color, ws_path, harness_prompt } = req.body as {
       id: string; name?: string; color?: string; ws_path?: string; harness_prompt?: string;
     };
@@ -48,6 +50,7 @@ export async function divisionRoutes(app: FastifyInstance) {
 
   app.delete('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { id } = req.body as { id: string };
     db.prepare('DELETE FROM divisions WHERE id = ? AND org_id = ?').run(id, user.orgId);
     return { ok: true };
@@ -55,6 +58,7 @@ export async function divisionRoutes(app: FastifyInstance) {
 
   app.post('/reorder', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { ids } = req.body as { ids: string[] };
     ids.forEach((id, i) => {
       db.prepare('UPDATE divisions SET order_index = ? WHERE id = ? AND org_id = ?').run(i, id, user.orgId);

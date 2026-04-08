@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/schema.js';
-import { requireAuth } from '../db/auth.js';
+import { requireAuth, requireRole } from '../db/auth.js';
 
 export async function auditRoutes(app: FastifyInstance) {
   app.get('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { user_id, resource, action, limit } = req.query as {
       user_id?: string; resource?: string; action?: string; limit?: string;
     };

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { db, newId } from '../db/schema.js';
-import { requireAuth } from '../db/auth.js';
+import { requireAuth, requireRole } from '../db/auth.js';
 
 export async function workspaceRoutes(app: FastifyInstance) {
   app.get('/', async (req, reply) => {
@@ -10,6 +10,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { name, path, division_id } = req.body as { name: string; path: string; division_id?: string };
     if (!name || !path) return reply.code(400).send({ error: 'name and path required' });
 
@@ -30,6 +31,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { id, name, path, division_id, harness_prompt } = req.body as {
       id: string; name?: string; path?: string; division_id?: string | null; harness_prompt?: string;
     };
@@ -48,6 +50,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.delete('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { id } = req.body as { id: string };
     db.prepare('DELETE FROM workspaces WHERE id = ? AND org_id = ?').run(id, user.orgId);
     return { ok: true };
@@ -55,6 +58,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.post('/reorder', async (req, reply) => {
     const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin'], reply)) return;
     const { ids } = req.body as { ids: string[] };
     ids.forEach((id, i) => {
       db.prepare('UPDATE workspaces SET order_index = ? WHERE id = ? AND org_id = ?').run(i, id, user.orgId);

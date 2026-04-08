@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-hub-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aihub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-aihub}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aihub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  vm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-hub-vm-server
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      HOST: 0.0.0.0
+      # PostgreSQL 연결
+      DATABASE_URL: postgres://${POSTGRES_USER:-aihub}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aihub}
+      # 허용할 클라이언트 origins (쉼표 구분)
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      # 세션 쿠키 서명 키 (반드시 변경)
+      COOKIE_SECRET: ${COOKIE_SECRET:?COOKIE_SECRET must be set}
+      # Vault 마스터 키: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      VAULT_MASTER_KEY: ${VAULT_MASTER_KEY:?VAULT_MASTER_KEY must be set}
+      # Anthropic API 키 (Fallback daemon용)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Webhook 서명 검증 키
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  pg-data:
+    driver: local

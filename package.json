@@ -1,31 +1,19 @@
 {
-  "name": "hub",
+  "name": "ai-hub",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "tsx server.ts",
-    "build": "next build",
-    "start": "NODE_ENV=production tsx server.ts"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "^12.8.0",
-    "input": "^1.0.1",
-    "next": "16.2.2",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3",
-    "telegram": "^2.26.22"
+    "dev:vm": "pnpm --filter vm-server dev",
+    "dev:app": "pnpm --filter electron-app dev",
+    "dev": "pnpm run dev:vm & pnpm run dev:app",
+    "build:vm": "pnpm --filter vm-server build",
+    "build:app": "pnpm --filter electron-app build",
+    "test": "pnpm --filter vm-server test && pnpm --filter electron-app test"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "tailwindcss": "^4",
-    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

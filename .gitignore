@@ -2,7 +2,12 @@ node_modules/
 .next/
 .data/
 *.env
+*.env.local
 auth.env
 .telegram_session
 *.session
 .claude.json
+
+# Playwright
+packages/electron-app/playwright-report/
+packages/electron-app/test-results/

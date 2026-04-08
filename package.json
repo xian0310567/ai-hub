@@ -10,7 +10,8 @@
     "dev:app": "pnpm --filter electron-app dev",
     "dev": "pnpm run dev:vm & pnpm run dev:app",
     "build:vm": "pnpm --filter vm-server build",
-    "build:app": "pnpm --filter electron-app build"
+    "build:app": "pnpm --filter electron-app build",
+    "test": "pnpm --filter vm-server test && pnpm --filter electron-app test"
   },
   "devDependencies": {
     "typescript": "^5"

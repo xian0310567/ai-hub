@@ -1,0 +1,304 @@
+/**
+ * Integration tests for /api/vaults (CRUD + encryption + RBAC)
+ */
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { buildApp } from './helpers/app.js';
+import { clearDb, seedUser, db } from './helpers/db.js';
+import { newId } from '../db/schema.js';
+
+let app: FastifyInstance;
+
+beforeAll(async () => { app = await buildApp(); });
+afterAll(async () => { await app.close(); });
+beforeEach(() => clearDb());
+
+async function createVault(cookie: string, name = 'Test Vault', scope = 'org') {
+  return app.inject({
+    method: 'POST',
+    url: '/api/vaults',
+    headers: { Cookie: cookie },
+    payload: { name, scope },
+  });
+}
+
+describe('POST /api/vaults — create vault', () => {
+  it('org_admin can create a vault (201)', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const res = await createVault(cookie);
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.name).toBe('Test Vault');
+    expect(body.scope).toBe('org');
+    expect(body.id).toBeDefined();
+  });
+
+  it('team_admin can create a vault (201)', async () => {
+    const { cookie } = seedUser({ role: 'team_admin' });
+    const res = await createVault(cookie, 'Team Vault');
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('member is forbidden (403)', async () => {
+    const { cookie } = seedUser({ role: 'member' });
+    const res = await createVault(cookie);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns 400 when name is missing', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/vaults',
+      headers: { Cookie: cookie },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/name/i);
+  });
+
+  it('returns 401 without session', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/vaults', payload: { name: 'v' } });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('GET /api/vaults — list vaults', () => {
+  it('returns only vaults for the user org', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    await createVault(cookie, 'Vault A');
+    await createVault(cookie, 'Vault B');
+
+    const res = await app.inject({ method: 'GET', url: '/api/vaults', headers: { Cookie: cookie } });
+    expect(res.statusCode).toBe(200);
+    const list = res.json() as { name: string }[];
+    expect(list.length).toBe(2);
+    expect(list.map((v) => v.name)).toContain('Vault A');
+  });
+});
+
+describe('POST /api/vaults/:id/secrets — add secret', () => {
+  it('encrypts and stores a secret', async () => {
+    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'API_KEY', value: 'super-secret-value' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ ok: true, key_name: 'API_KEY' });
+
+    // Raw DB row should have encrypted data, not plaintext
+    const row = db.prepare('SELECT * FROM vault_secrets WHERE vault_id = ? AND key_name = ?').get(vaultId, 'API_KEY') as {
+      encrypted_value: string; key_name: string;
+    } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.encrypted_value).not.toBe('super-secret-value');
+  });
+
+  it('member cannot add secrets (403)', async () => {
+    const { cookie: adminCookie } = seedUser({ role: 'org_admin' });
+    const { cookie: memberCookie } = seedUser({ role: 'member', username: 'member1' });
+    const vaultRes = await createVault(adminCookie);
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: memberCookie },
+      payload: { key_name: 'K', value: 'v' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('upserts existing key_name', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'TOKEN', value: 'v1' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'TOKEN', value: 'v2' },
+    });
+
+    const count = (db.prepare('SELECT count(*) as c FROM vault_secrets WHERE vault_id = ? AND key_name = ?').get(vaultId, 'TOKEN') as { c: number }).c;
+    expect(count).toBe(1);
+  });
+});
+
+describe('GET /api/vaults/:id/secrets — list secrets (no values)', () => {
+  it('returns key names but no encrypted values', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'MY_KEY', value: 'my-value' },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const list = res.json() as { key_name: string; encrypted_value?: string }[];
+    expect(list.length).toBe(1);
+    expect(list[0].key_name).toBe('MY_KEY');
+    expect(list[0].encrypted_value).toBeUndefined(); // not returned
+  });
+});
+
+describe('POST /api/vaults/:id/lease — decrypt secrets', () => {
+  it('decrypts and returns plaintext values', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'SECRET', value: 'my-plaintext' },
+    });
+
+    const leaseRes = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/lease`,
+      headers: { Cookie: cookie },
+      payload: { task_id: 'task-1', key_names: ['SECRET'] },
+    });
+    expect(leaseRes.statusCode).toBe(200);
+    expect(leaseRes.json().secrets.SECRET).toBe('my-plaintext');
+  });
+
+  it('creates an audit log entry on lease', async () => {
+    const { cookie, orgId } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'K', value: 'v' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/lease`,
+      headers: { Cookie: cookie },
+      payload: { task_id: 'task-xyz', key_names: ['K'] },
+    });
+
+    const log = db.prepare(`SELECT * FROM audit_logs WHERE action = 'vault.lease' AND resource_id = ?`).get(vaultId);
+    expect(log).toBeDefined();
+  });
+});
+
+describe('PATCH /api/vaults/:id — update vault metadata', () => {
+  it('updates name and description', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie, 'OldName');
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/vaults/${vaultId}`,
+      headers: { Cookie: cookie },
+      payload: { name: 'NewName', description: 'updated desc' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe('NewName');
+    expect(res.json().description).toBe('updated desc');
+  });
+
+  it('member cannot update (403)', async () => {
+    const { cookie: adminCookie } = seedUser({ role: 'org_admin' });
+    const { cookie: memberCookie } = seedUser({ role: 'member', username: 'mem2' });
+    const vaultRes = await createVault(adminCookie);
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/vaults/${vaultId}`,
+      headers: { Cookie: memberCookie },
+      payload: { name: 'Hacked' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('DELETE /api/vaults/:id — delete vault', () => {
+  it('org_admin can delete a vault', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie, 'ToDelete');
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/vaults/${vaultId}`,
+      headers: { Cookie: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+
+    const row = db.prepare('SELECT id FROM vaults WHERE id = ?').get(vaultId);
+    expect(row).toBeUndefined();
+  });
+
+  it('team_admin cannot delete a vault (403)', async () => {
+    const { cookie: adminCookie } = seedUser({ role: 'org_admin' });
+    const { cookie: teamAdminCookie } = seedUser({ role: 'team_admin', username: 'tadmin' });
+    const vaultRes = await createVault(adminCookie);
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/vaults/${vaultId}`,
+      headers: { Cookie: teamAdminCookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('DELETE /api/vaults/:id/secrets/:secretId', () => {
+  it('deletes a specific secret', async () => {
+    const { cookie } = seedUser({ role: 'org_admin' });
+    const vaultRes = await createVault(cookie);
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'DEL_KEY', value: 'val' },
+    });
+
+    const secretRow = db.prepare('SELECT id FROM vault_secrets WHERE vault_id = ? AND key_name = ?').get(vaultId, 'DEL_KEY') as { id: string };
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/vaults/${vaultId}/secrets/${secretRow.id}`,
+      headers: { Cookie: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+
+    const row = db.prepare('SELECT id FROM vault_secrets WHERE id = ?').get(secretRow.id);
+    expect(row).toBeUndefined();
+  });
+});

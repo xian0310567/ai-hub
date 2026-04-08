@@ -8,7 +8,9 @@
     "dev:next": "next dev",
     "build": "next build && electron-builder build",
     "start": "NODE_ENV=production next start",
-    "electron:dev": "electron ."
+    "electron:dev": "electron .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
@@ -28,6 +30,7 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
+    "vitest": "^2.1.0",
     "wait-on": "^8.0.3"
   },
   "build": {

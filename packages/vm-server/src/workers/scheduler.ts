@@ -3,7 +3,7 @@
  * Runs inside the vm-server process.
  */
 
-import { parseExpression } from 'cron-parser';
+import cronParser from 'cron-parser';
 import { getPool, exec, newId, now } from '../db/pool.js';
 
 const SCHEDULER_INTERVAL_MS = Number(process.env.SCHEDULER_POLL_MS) || 60_000;
@@ -20,7 +20,7 @@ type ScheduleRow = {
 
 /** Compute next unix-second timestamp after `after` for the given cron expression. */
 function nextCronTs(cronExpr: string, after = new Date()): number {
-  const interval = parseExpression(cronExpr, { currentDate: after });
+  const interval = cronParser.parseExpression(cronExpr, { currentDate: after });
   return Math.floor(interval.next().getTime() / 1000);
 }
 

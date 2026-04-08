@@ -1,10 +1,12 @@
 import { NextRequest } from 'next/server';
 import { spawn, execSync } from 'child_process';
-import { Agents, Workspaces, Divisions, ChatLogs } from '@/lib/db';
+import { ChatLogs } from '@/lib/db';
 import { randomUUID } from 'crypto';
-import { getSession, getUserSessionsDir } from '@/lib/auth';
+import { getSession, getVmSessionCookie, getUserSessionsDir } from '@/lib/auth';
 import path from 'path';
 import fs from 'fs';
+
+const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
 
 // DB에 없는 기존 에이전트용 fallback (레거시)
 const LEGACY_MAP: Record<string, { name: string; workspace: string; commandName: string | null }> = {
@@ -15,6 +17,32 @@ const LEGACY_MAP: Record<string, { name: string; workspace: string; commandName:
   'quant-kr':     { name: '코스모', workspace: 'workspace-quant-kr', commandName: null },
   pod:            { name: 'POD',  workspace: 'workspace-pod',       commandName: null },
 };
+
+interface VmAgent {
+  id: string; org_id: string; workspace_id: string; team_id?: string;
+  org_level?: string; is_lead: number; name: string; command_name?: string;
+  harness_pattern?: string; model?: string;
+}
+
+async function fetchAgent(agentId: string, cookie: string): Promise<VmAgent | null> {
+  try {
+    const res = await fetch(`${VM_URL}/api/agents/${agentId}`, {
+      headers: { Cookie: cookie },
+    });
+    if (!res.ok) return null;
+    return res.json() as Promise<VmAgent>;
+  } catch { return null; }
+}
+
+async function fetchWorkspacePath(workspaceId: string, cookie: string, isDivision: boolean): Promise<string | null> {
+  try {
+    const endpoint = isDivision ? `/api/divisions/${workspaceId}` : `/api/workspaces/${workspaceId}`;
+    const res = await fetch(`${VM_URL}${endpoint}`, { headers: { Cookie: cookie } });
+    if (!res.ok) return null;
+    const data = await res.json() as { path?: string; ws_path?: string };
+    return data.ws_path ?? data.path ?? null;
+  } catch { return null; }
+}
 
 function getSessionsDir(userId: string): string {
   const dir = getUserSessionsDir(userId);
@@ -143,26 +171,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
     return new Response(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   }
 
-  const agent = Agents.get(agentId);
+  const cookie = getVmSessionCookie(req);
   const legacy = LEGACY_MAP[agentId];
 
   let cwdPath: string;
-  let commandName: string | null;
+  let commandName: string | null = null;
   let isLead = false;
+  let model: string | undefined;
+
+  // vm-server에서 에이전트 조회
+  const agent = await fetchAgent(agentId, cookie);
 
   if (agent) {
-    if (agent.user_id !== user.id) return Response.json({ ok: false, error: '권한 없음' }, { status: 403 });
-    const ws = Workspaces.get(agent.workspace_id);
-    if (ws) {
-      cwdPath = ws.path;
-    } else {
-      // division-level agents store division.id in workspace_id
-      const div = Divisions.get(agent.workspace_id);
-      if (!div) return Response.json({ ok: false, error: '워크스페이스를 찾을 수 없습니다' }, { status: 404 });
-      cwdPath = div.ws_path;
-    }
-    commandName = agent.command_name;
+    const isDivision = agent.org_level === 'division';
+    const wsPath = await fetchWorkspacePath(agent.workspace_id, cookie, isDivision);
+    if (!wsPath) return Response.json({ ok: false, error: '워크스페이스를 찾을 수 없습니다' }, { status: 404 });
+    cwdPath = wsPath;
+    commandName = agent.command_name ?? null;
     isLead = agent.is_lead === 1;
+    model = agent.model;
   } else if (legacy) {
     const base = path.join(process.env.USERPROFILE || process.env.HOME || '', '.openclaw');
     cwdPath = path.join(base, legacy.workspace);
@@ -175,7 +202,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
     try { ChatLogs.add({ id: randomUUID(), user_id: user.id, agent_id: agentId, role: 'assistant', content: full }); } catch {}
   };
 
-  return new Response(runClaude(cwdPath, commandName, message, user.id, agentId, isLead, saveLog, agent?.model), {
+  return new Response(runClaude(cwdPath, commandName, message, user.id, agentId, isLead, saveLog, model), {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
       'Transfer-Encoding': 'chunked',

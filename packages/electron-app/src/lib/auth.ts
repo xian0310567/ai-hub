@@ -54,3 +54,7 @@ export function getUserWorkspacesDir(userId: string): string {
 export function getUserClaudeConfigDir(userId: string): string {
   return path.join(DATA_DIR, 'users', userId, '.claude');
 }
+
+export function getUserSessionsDir(userId: string): string {
+  return path.join(DATA_DIR, 'users', userId, 'sessions');
+}

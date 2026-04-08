@@ -26,6 +26,14 @@ export async function teamRoutes(app: FastifyInstance) {
     return reply.code(201).send(db.prepare('SELECT * FROM teams WHERE id = ?').get(id));
   });
 
+  app.get('/:id', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const team = db.prepare('SELECT * FROM teams WHERE id = ? AND org_id = ?').get(id, user.orgId);
+    if (!team) return reply.code(404).send({ error: 'Not found' });
+    return team;
+  });
+
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
     const { id, name, description, color, workspace_id, harness_prompt } = req.body as {

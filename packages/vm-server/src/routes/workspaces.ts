@@ -20,6 +20,14 @@ export async function workspaceRoutes(app: FastifyInstance) {
     return reply.code(201).send(db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id));
   });
 
+  app.get('/:id', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const ws = db.prepare('SELECT * FROM workspaces WHERE id = ? AND org_id = ?').get(id, user.orgId);
+    if (!ws) return reply.code(404).send({ error: 'Not found' });
+    return ws;
+  });
+
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
     const { id, name, path, division_id, harness_prompt } = req.body as {

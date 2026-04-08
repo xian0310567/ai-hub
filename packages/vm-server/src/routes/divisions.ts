@@ -20,6 +20,14 @@ export async function divisionRoutes(app: FastifyInstance) {
     return reply.code(201).send(db.prepare('SELECT * FROM divisions WHERE id = ?').get(id));
   });
 
+  app.get('/:id', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    const { id } = req.params as { id: string };
+    const div = db.prepare('SELECT * FROM divisions WHERE id = ? AND org_id = ?').get(id, user.orgId);
+    if (!div) return reply.code(404).send({ error: 'Not found' });
+    return div;
+  });
+
   app.patch('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
     const { id, name, color, ws_path, harness_prompt } = req.body as {

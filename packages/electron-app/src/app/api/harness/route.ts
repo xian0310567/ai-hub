@@ -1,11 +1,10 @@
 import { NextRequest } from 'next/server';
-import { Agents, Teams, Parts, Workspaces, Divisions } from '@/lib/db';
-import db from '@/lib/db';
-import { getSession } from '@/lib/auth';
+import { getSession, getVmSessionCookie } from '@/lib/auth';
 import { execFileSync } from 'child_process';
-import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
+
+const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
 
 // ── 하네스 패턴 지식 (팀 전용) ──────────────────────────────────────
 const HARNESS_KNOWLEDGE = `
@@ -37,9 +36,78 @@ const HARNESS_KNOWLEDGE = `
 언제: 전문 실무자, 특정 도메인 전문가 (개발자, 디자이너 등)
 `;
 
+// ── vm-server 헬퍼 ────────────────────────────────────────────────────
+async function vmGet<T>(endpoint: string, cookie: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${VM_URL}${endpoint}`, {
+      headers: { Cookie: cookie },
+    });
+    if (!res.ok) return null;
+    return res.json() as Promise<T>;
+  } catch { return null; }
+}
+
+async function vmPost<T>(endpoint: string, cookie: string, body: unknown): Promise<T | null> {
+  try {
+    const res = await fetch(`${VM_URL}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return res.json() as Promise<T>;
+  } catch { return null; }
+}
+
+async function vmPatch(endpoint: string, cookie: string, body: unknown): Promise<void> {
+  try {
+    await fetch(`${VM_URL}${endpoint}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+}
+
+async function vmDelete(endpoint: string, cookie: string, body: unknown): Promise<void> {
+  try {
+    await fetch(`${VM_URL}${endpoint}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+}
+
+interface VmWorkspace { id: string; name: string; path: string; division_id?: string }
+interface VmDivision  { id: string; name: string; ws_path: string }
+interface VmTeam      { id: string; name: string; workspace_id: string }
+interface VmAgent     { id: string; command_name?: string; org_level?: string; is_lead: number }
+
+async function getWsPath(
+  orgId: string,
+  orgType: 'division' | 'department' | 'team',
+  cookie: string,
+): Promise<{ wsPath: string; workspaceId?: string } | null> {
+  if (orgType === 'division') {
+    const div = await vmGet<VmDivision>(`/api/divisions/${orgId}`, cookie);
+    if (!div?.ws_path) return null;
+    return { wsPath: div.ws_path };
+  }
+  if (orgType === 'department') {
+    const ws = await vmGet<VmWorkspace>(`/api/workspaces/${orgId}`, cookie);
+    if (!ws?.path) return null;
+    return { wsPath: ws.path, workspaceId: ws.id };
+  }
+  // team
+  const team = await vmGet<VmTeam>(`/api/teams/${orgId}`, cookie);
+  if (!team) return null;
+  const ws = await vmGet<VmWorkspace>(`/api/workspaces/${team.workspace_id}`, cookie);
+  if (!ws?.path) return null;
+  return { wsPath: ws.path, workspaceId: ws.id };
+}
+
 // ── POST /api/harness — 설계 요청 ────────────────────────────────────
-// 부문/실: 리더 역할 정의 (소울 생성)
-// 팀: 멀티 에이전트 팀 구조 설계
 export async function POST(req: NextRequest) {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
@@ -52,18 +120,10 @@ export async function POST(req: NextRequest) {
   };
   if (!task?.trim()) return Response.json({ ok: false, error: '업무 설명을 입력하세요' }, { status: 400 });
 
-  // 워크스페이스 경로 확인
-  let wsPath: string | null = null;
-  if (org_type === 'division') {
-    wsPath = Divisions.get(org_id)?.ws_path ?? null;
-  } else if (org_type === 'department') {
-    wsPath = Workspaces.get(org_id)?.path ?? null;
-  } else {
-    const team = Teams.get(org_id);
-    const ws = team ? Workspaces.get(team.workspace_id) : null;
-    wsPath = ws?.path ?? null;
-  }
-  if (!wsPath) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  const cookie = getVmSessionCookie(req);
+  const loc = await getWsPath(org_id, org_type, cookie);
+  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  const { wsPath } = loc;
 
   // ── 부문/실: 리더 역할 정의 ──
   if (org_type === 'division' || org_type === 'department') {
@@ -173,111 +233,76 @@ export async function PATCH(req: NextRequest) {
     mode: 'leader' | 'team';
   };
 
+  const cookie = getVmSessionCookie(req);
+  const loc = await getWsPath(org_id, org_type, cookie);
+  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  const { wsPath, workspaceId } = loc;
+
   // ── 부문/실: 리더 1명만 생성/업데이트 ──
   if (mode === 'leader') {
-    let wsPath: string;
+    const soul = design.soul || '';
+    const name = design.name || `${org_name}장`;
+    const cmd = name.toLowerCase().replace(/[^a-z0-9가-힣]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
-    if (org_type === 'division') {
-      const div = Divisions.get(org_id);
-      if (!div) return Response.json({ ok: false, error: '부문 없음' }, { status: 404 });
-      wsPath = div.ws_path;
+    fs.mkdirSync(path.join(wsPath, '.claude', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(wsPath, 'SOUL.md'), soul, 'utf8');
+    fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
+      `---\nname: ${cmd}\ndescription: "${name}"\n---\n\n${soul}`, 'utf8');
 
-      // 기존 부문장 찾기
-      const existing = Agents.listByUser(user.id).find(a => a.org_level === 'division' && a.workspace_id === org_id);
+    // 기존 리더 에이전트 조회
+    const agentEp = org_type === 'division'
+      ? `/api/agents?workspace_id=${org_id}`
+      : `/api/agents?workspace_id=${org_id}`;
+    const existingAgents = await vmGet<VmAgent[]>(agentEp, cookie) ?? [];
+    const existing = existingAgents.find(a => a.org_level === org_type);
 
-      const soul = design.soul || '';
-      const name = design.name || `${org_name}장`;
-      const cmd = name.toLowerCase().replace(/[^a-z0-9가-힣]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-
-      fs.mkdirSync(path.join(wsPath, '.claude', 'agents'), { recursive: true });
-      fs.writeFileSync(path.join(wsPath, 'SOUL.md'), soul, 'utf8');
-      fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
-        `---\nname: ${cmd}\ndescription: "${name}"\n---\n\n${soul}`, 'utf8');
-
-      if (existing) {
-        Agents.update(existing.id, { name, emoji: design.emoji || existing.emoji, color: design.color || existing.color, soul, command_name: cmd });
-      } else {
-        Agents.create({
-          id: randomUUID(), workspace_id: org_id, team_id: null, part_id: null,
-          parent_agent_id: null, org_level: 'division', is_lead: 1,
-          name, emoji: design.emoji || '👔', color: design.color || '#7c3aed',
-          soul, command_name: cmd, harness_pattern: 'orchestrator',
-          model: 'claude-opus-4-5', user_id: user.id,
-        });
-      }
-
-      // harness_prompt 저장
-      if (task) db.prepare('UPDATE divisions SET harness_prompt=? WHERE id=?').run(task, org_id);
-
-      return Response.json({ ok: true, created: [name] });
-
+    if (existing) {
+      await vmPatch('/api/agents', cookie, {
+        id: existing.id, name, emoji: design.emoji, color: design.color, soul, command_name: cmd,
+      });
     } else {
-      // department
-      const ws = Workspaces.get(org_id);
-      if (!ws || ws.user_id !== user.id) return Response.json({ ok: false, error: '실 없음' }, { status: 404 });
-      wsPath = ws.path;
-
-      const existing = Agents.listByUser(user.id).find(a => a.org_level === 'department' && a.workspace_id === org_id);
-
-      const soul = design.soul || '';
-      const name = design.name || `${org_name}장`;
-      const cmd = name.toLowerCase().replace(/[^a-z0-9가-힣]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-
-      fs.mkdirSync(path.join(wsPath, '.claude', 'agents'), { recursive: true });
-      fs.writeFileSync(path.join(wsPath, 'SOUL.md'), soul, 'utf8');
-      fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
-        `---\nname: ${cmd}\ndescription: "${name}"\n---\n\n${soul}`, 'utf8');
-
-      if (existing) {
-        Agents.update(existing.id, { name, emoji: design.emoji || existing.emoji, color: design.color || existing.color, soul, command_name: cmd });
-      } else {
-        Agents.create({
-          id: randomUUID(), workspace_id: org_id, team_id: null, part_id: null,
-          parent_agent_id: null, org_level: 'department', is_lead: 1,
-          name, emoji: design.emoji || '👔', color: design.color || '#6366f1',
-          soul, command_name: cmd, harness_pattern: 'orchestrator',
-          model: 'claude-opus-4-5', user_id: user.id,
-        });
-      }
-
-      if (task) db.prepare('UPDATE workspaces SET harness_prompt=? WHERE id=?').run(task, org_id);
-
-      return Response.json({ ok: true, created: [name] });
+      await vmPost('/api/agents', cookie, {
+        workspace_id: org_id, team_id: null, part_id: null, parent_agent_id: null,
+        org_level: org_type, is_lead: true,
+        name, emoji: design.emoji || '👔', color: design.color || '#7c3aed',
+        soul, command_name: cmd, harness_pattern: 'orchestrator',
+        model: 'claude-opus-4-5',
+      });
     }
+
+    // harness_prompt 저장
+    if (task) {
+      const patchEp = org_type === 'division' ? '/api/divisions' : '/api/workspaces';
+      await vmPatch(patchEp, cookie, { id: org_id, harness_prompt: task });
+    }
+
+    return Response.json({ ok: true, created: [name] });
   }
 
   // ── 팀: 멀티 에이전트 생성 ──
-  const team = Teams.get(org_id);
-  if (!team || team.user_id !== user.id) return Response.json({ ok: false, error: '팀 없음' }, { status: 404 });
-  const ws = Workspaces.get(team.workspace_id);
-  if (!ws) return Response.json({ ok: false, error: '워크스페이스 없음' }, { status: 404 });
-  const wsPath = ws.path;
-  const workspace_id = ws.id;
-
   fs.mkdirSync(path.join(wsPath, '.claude', 'agents'), { recursive: true });
   fs.mkdirSync(path.join(wsPath, 'memory'), { recursive: true });
 
   // 기존 팀 에이전트 전체 삭제 (하네스 재설정 시 덮어쓰기)
-  const existingAgents = Agents.listByTeam(org_id);
+  const existingAgents = await vmGet<VmAgent[]>(`/api/agents?team_id=${org_id}`, cookie) ?? [];
   for (const ea of existingAgents) {
-    // 기존 에이전트 .md 파일도 삭제
     if (ea.command_name) {
       const mdPath = path.join(wsPath, '.claude', 'agents', `${ea.command_name}.md`);
       try { fs.unlinkSync(mdPath); } catch {}
     }
-    Agents.delete(ea.id);
+    await vmDelete('/api/agents', cookie, { id: ea.id });
   }
 
+  const wsId = workspaceId ?? org_id;
   const created: string[] = [];
 
   for (const a of design.agents) {
-    const id = randomUUID();
     const cmd = a.name.toLowerCase()
       .replace(/[^a-z0-9가-힣]/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '');
 
-    const org_level = a.is_lead ? 'team' : 'worker';
+    const orgLevel = a.is_lead ? 'team' : 'worker';
     const soul = `## 정체성\n당신은 ${a.name}입니다.\n\n## 핵심 역할\n${a.role}\n\n## 업무 처리 원칙\n- 맡은 업무에 집중하고 결과를 명확하게 전달합니다.\n- 문제 발생 시 즉시 보고하고 해결 방안을 제시합니다.\n\n## 보고 형식\n핵심 결과 → 진행 과정 → 다음 단계`;
 
     const mdContent = `---\nname: ${cmd}\ndescription: "${a.name} — ${a.role.slice(0, 80)}"\n---\n\n${soul}`;
@@ -287,19 +312,21 @@ export async function PATCH(req: NextRequest) {
       fs.writeFileSync(path.join(wsPath, 'SOUL.md'), soul, 'utf8');
     }
 
-    Agents.create({
-      id, workspace_id, team_id: org_id, part_id: null,
-      parent_agent_id: null, org_level,
-      is_lead: a.is_lead ? 1 : 0,
+    const newAgent = await vmPost<{ id: string }>('/api/agents', cookie, {
+      workspace_id: wsId, team_id: org_id, part_id: null,
+      parent_agent_id: null, org_level: orgLevel,
+      is_lead: a.is_lead,
       name: a.name, emoji: a.emoji, color: a.color, soul,
       command_name: cmd, harness_pattern: a.harness_pattern,
-      model: a.model || 'claude-sonnet-4-5', user_id: user.id,
+      model: a.model || 'claude-sonnet-4-5',
     });
 
     // 백그라운드 소울 개선
-    setImmediate(() => {
-      try {
-        const improvePrompt = `다음 에이전트의 SOUL.md를 더 구체적이고 실용적으로 개선해주세요.
+    if (newAgent?.id) {
+      const agentId = newAgent.id;
+      setImmediate(() => {
+        try {
+          const improvePrompt = `다음 에이전트의 SOUL.md를 더 구체적이고 실용적으로 개선해주세요.
 
 에이전트: ${a.name}
 역할: ${a.role}
@@ -309,23 +336,24 @@ export async function PATCH(req: NextRequest) {
 ${soul}
 
 개선된 SOUL.md만 출력 (## 정체성, ## 핵심 역할, ## 업무 처리 원칙, ## 협업 방식, ## 보고 형식 섹션 포함):`;
-        const improved = execFileSync('claude', ['-p', improvePrompt], {
-          cwd: wsPath, encoding: 'utf8', timeout: 60000, env: { ...process.env },
-        }).trim();
-        if (improved && improved.length > 50) {
-          Agents.update(id, { soul: improved });
-          if (a.is_lead) fs.writeFileSync(path.join(wsPath, 'SOUL.md'), improved, 'utf8');
-          fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
-            `---\nname: ${cmd}\ndescription: "${a.name} — ${a.role.slice(0, 80)}"\n---\n\n${improved}`, 'utf8');
-        }
-      } catch {}
-    });
+          const improved = execFileSync('claude', ['-p', improvePrompt], {
+            cwd: wsPath, encoding: 'utf8', timeout: 60000, env: { ...process.env },
+          }).trim();
+          if (improved && improved.length > 50) {
+            vmPatch('/api/agents', cookie, { id: agentId, soul: improved });
+            if (a.is_lead) fs.writeFileSync(path.join(wsPath, 'SOUL.md'), improved, 'utf8');
+            fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
+              `---\nname: ${cmd}\ndescription: "${a.name} — ${a.role.slice(0, 80)}"\n---\n\n${improved}`, 'utf8');
+          }
+        } catch {}
+      });
+    }
 
     created.push(a.name);
   }
 
   // harness_prompt 저장
-  if (task) db.prepare('UPDATE teams SET harness_prompt=? WHERE id=?').run(task, org_id);
+  if (task) await vmPatch('/api/teams', cookie, { id: org_id, harness_prompt: task });
 
   return Response.json({ ok: true, created });
 }

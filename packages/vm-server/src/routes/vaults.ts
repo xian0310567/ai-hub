@@ -3,6 +3,9 @@ import crypto from 'crypto';
 import { db, newId } from '../db/schema.js';
 import { requireAuth, requireRole } from '../db/auth.js';
 
+// personal_meta vault secrets는 값을 서버에 저장하지 않음 (사용자 PC 로컬에만)
+const PERSONAL_PLACEHOLDER = '__personal__';
+
 // ─────────────────────────────────────────────────────
 // Envelope Encryption 유틸
 // KEK: 환경변수 VAULT_MASTER_KEY (32바이트 hex)
@@ -55,44 +58,87 @@ function decryptValue(encryptedValue: string, encryptedDekB64: string, ivB64: st
 }
 
 export async function vaultRoutes(app: FastifyInstance) {
-  // Vault 목록
+  // Vault 목록 (personal_meta는 본인 것만)
   app.get('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
-    return db.prepare('SELECT id,org_id,scope,team_id,name,description,expires_at,created_at FROM vaults WHERE org_id = ? ORDER BY created_at').all(user.orgId);
+    return db.prepare(`
+      SELECT id,org_id,scope,team_id,owner_user_id,name,description,expires_at,created_at
+      FROM vaults
+      WHERE org_id = ? AND (scope != 'personal_meta' OR owner_user_id = ?)
+      ORDER BY created_at
+    `).all(user.orgId, user.userId);
   });
 
-  // Vault 생성 (org_admin만)
+  // Vault 생성
+  // - personal_meta: 모든 멤버 생성 가능, owner_user_id = 본인
+  // - org/team: org_admin/team_admin만 생성 가능
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
-    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
 
     const { name, scope, team_id, description, expires_at } = req.body as {
       name: string; scope?: string; team_id?: string; description?: string; expires_at?: number;
     };
     if (!name) return reply.code(400).send({ error: 'name required' });
 
+    const effectiveScope = scope ?? 'org';
+
+    if (effectiveScope === 'personal_meta') {
+      const id = newId();
+      db.prepare('INSERT INTO vaults(id,org_id,scope,team_id,owner_user_id,name,description,expires_at) VALUES(?,?,?,?,?,?,?,?)').run(
+        id, user.orgId, 'personal_meta', null, user.userId, name, description ?? '', expires_at ?? null
+      );
+      return reply.code(201).send(db.prepare('SELECT * FROM vaults WHERE id = ?').get(id));
+    }
+
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const id = newId();
-    db.prepare('INSERT INTO vaults(id,org_id,scope,team_id,name,description,expires_at) VALUES(?,?,?,?,?,?,?)').run(
-      id, user.orgId, scope ?? 'org', team_id ?? null, name, description ?? '', expires_at ?? null
+    db.prepare('INSERT INTO vaults(id,org_id,scope,team_id,owner_user_id,name,description,expires_at) VALUES(?,?,?,?,?,?,?,?)').run(
+      id, user.orgId, effectiveScope, team_id ?? null, null, name, description ?? '', expires_at ?? null
     );
     return reply.code(201).send(db.prepare('SELECT * FROM vaults WHERE id = ?').get(id));
   });
 
-  // 시크릿 추가 (Write-only: 저장 후 값은 다시 조회 불가)
+  // 시크릿 추가
+  // - personal_meta: key_name만 등록 (값은 사용자 PC 로컬에 저장됨)
+  // - org/team: 암호화하여 서버에 저장 (Write-only)
   app.post('/:vaultId/secrets', async (req, reply) => {
     const user = await requireAuth(req, reply);
-    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
 
     const { vaultId } = req.params as { vaultId: string };
-    const { key_name, value } = req.body as { key_name: string; value: string };
-    if (!key_name || !value) return reply.code(400).send({ error: 'key_name and value required' });
+    const { key_name, value } = req.body as { key_name: string; value?: string };
+    if (!key_name) return reply.code(400).send({ error: 'key_name required' });
 
-    const vault = db.prepare('SELECT id FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId);
+    const vault = db.prepare('SELECT id,scope,owner_user_id FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId) as {
+      id: string; scope: string; owner_user_id: string | null;
+    } | undefined;
     if (!vault) return reply.code(404).send({ error: 'Vault not found' });
 
-    const { encryptedValue, encryptedDek, iv, authTag } = encryptValue(value);
     const id = newId();
     const now = Math.floor(Date.now() / 1000);
+
+    if (vault.scope === 'personal_meta') {
+      // 본인 personal vault만 관리 가능
+      if (vault.owner_user_id !== user.userId) return reply.code(403).send({ error: 'Forbidden' });
+
+      // 값은 로컬에만 저장. 서버에는 key_name만 (placeholder)
+      db.prepare(`
+        INSERT INTO vault_secrets(id,vault_id,key_name,encrypted_value,encrypted_dek,iv,auth_tag,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(vault_id,key_name) DO UPDATE SET updated_at=excluded.updated_at
+      `).run(id, vaultId, key_name, PERSONAL_PLACEHOLDER, PERSONAL_PLACEHOLDER, PERSONAL_PLACEHOLDER, PERSONAL_PLACEHOLDER, now, now);
+
+      db.prepare('INSERT INTO audit_logs(id,org_id,user_id,action,resource,resource_id,meta) VALUES(?,?,?,?,?,?,?)').run(
+        newId(), user.orgId, user.userId, 'vault.personal.key_registered', 'vault_secret', vaultId,
+        JSON.stringify({ key_name })
+      );
+      return reply.code(201).send({ ok: true, key_name });
+    }
+
+    // org/team vault
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
+    if (!value) return reply.code(400).send({ error: 'value required' });
+
+    const { encryptedValue, encryptedDek, iv, authTag } = encryptValue(value);
     db.prepare(`
       INSERT INTO vault_secrets(id,vault_id,key_name,encrypted_value,encrypted_dek,iv,auth_tag,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?)
@@ -162,13 +208,20 @@ export async function vaultRoutes(app: FastifyInstance) {
   });
 
   // 시크릿 Lease (데몬이 작업 실행 시 호출)
+  // personal_meta vault는 서버에 값 없음 → 403 반환
   app.post('/:vaultId/lease', async (req, reply) => {
     const user = await requireAuth(req, reply);
     const { vaultId } = req.params as { vaultId: string };
     const { task_id, key_names } = req.body as { task_id: string; key_names: string[] };
 
-    const vault = db.prepare('SELECT id FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId);
+    const vault = db.prepare('SELECT id,scope FROM vaults WHERE id = ? AND org_id = ?').get(vaultId, user.orgId) as {
+      id: string; scope: string;
+    } | undefined;
     if (!vault) return reply.code(404).send({ error: 'Vault not found' });
+
+    if (vault.scope === 'personal_meta') {
+      return reply.code(403).send({ error: 'personal_meta vault secrets are stored locally on the user\'s PC — use the electron-app personal vault API' });
+    }
 
     const secrets: Record<string, string> = {};
     for (const key_name of key_names) {

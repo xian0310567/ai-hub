@@ -302,3 +302,114 @@ describe('DELETE /api/vaults/:id/secrets/:secretId', () => {
     expect(row).toBeUndefined();
   });
 });
+
+// ── Phase 3: personal_meta vault 테스트 ────────────────────────────────
+
+describe('personal_meta vault — 생성 및 RBAC', () => {
+  it('member도 personal_meta vault 생성 가능 (201)', async () => {
+    const { cookie } = seedUser({ role: 'member', username: 'mem-personal' });
+    const res = await createVault(cookie, 'My Personal Keys', 'personal_meta');
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.scope).toBe('personal_meta');
+    expect(body.owner_user_id).toBeDefined();
+  });
+
+  it('owner_user_id가 본인으로 설정됨', async () => {
+    const { cookie, userId } = seedUser({ role: 'member', username: 'mem-owner' });
+    const res = await createVault(cookie, 'Personal', 'personal_meta');
+    expect(res.json().owner_user_id).toBe(userId);
+  });
+
+  it('목록 조회 시 본인 personal vault만 포함', async () => {
+    const { cookie: c1, userId: u1 } = seedUser({ role: 'member', username: 'user1' });
+    const { cookie: c2 } = seedUser({ role: 'member', username: 'user2' });
+
+    await createVault(c1, 'User1 Personal', 'personal_meta');
+    await createVault(c2, 'User2 Personal', 'personal_meta');
+
+    const res = await app.inject({ method: 'GET', url: '/api/vaults', headers: { Cookie: c1 } });
+    const list = res.json() as { scope: string; owner_user_id?: string }[];
+    const personalInList = list.filter(v => v.scope === 'personal_meta');
+    // user1의 personal vault만 보여야 함
+    expect(personalInList.every(v => v.owner_user_id === u1)).toBe(true);
+  });
+});
+
+describe('personal_meta vault — 시크릿 등록 (key_name만, 값 없음)', () => {
+  it('owner가 key_name 등록 시 placeholder 저장 (201)', async () => {
+    const { cookie } = seedUser({ role: 'member', username: 'pvowner' });
+    const vaultRes = await createVault(cookie, 'PV', 'personal_meta');
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'MY_TOKEN' },  // value 없음 — personal은 로컬에 저장됨
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ ok: true, key_name: 'MY_TOKEN' });
+
+    // DB에는 placeholder 저장
+    const row = db.prepare('SELECT encrypted_value FROM vault_secrets WHERE vault_id = ? AND key_name = ?')
+      .get(vaultId, 'MY_TOKEN') as { encrypted_value: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.encrypted_value).toBe('__personal__');
+  });
+
+  it('다른 사용자가 personal vault에 추가 불가 (403)', async () => {
+    const { cookie: ownerCookie } = seedUser({ role: 'member', username: 'pv-o' });
+    const { cookie: otherCookie } = seedUser({ role: 'member', username: 'pv-x' });
+    const vaultRes = await createVault(ownerCookie, 'PV', 'personal_meta');
+    const vaultId = vaultRes.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: otherCookie },
+      payload: { key_name: 'K' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('audit log 기록: vault.personal.key_registered', async () => {
+    const { cookie, orgId } = seedUser({ role: 'member', username: 'pv-audit' });
+    const vaultRes = await createVault(cookie, 'PV', 'personal_meta');
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'AUDIT_KEY' },
+    });
+
+    const log = db.prepare(`SELECT * FROM audit_logs WHERE action = 'vault.personal.key_registered' AND resource_id = ?`).get(vaultId);
+    expect(log).toBeDefined();
+  });
+});
+
+describe('personal_meta vault — Lease 요청 거부', () => {
+  it('personal_meta vault lease → 403', async () => {
+    const { cookie } = seedUser({ role: 'member', username: 'pv-lease' });
+    const vaultRes = await createVault(cookie, 'PV', 'personal_meta');
+    const vaultId = vaultRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/secrets`,
+      headers: { Cookie: cookie },
+      payload: { key_name: 'K' },
+    });
+
+    const leaseRes = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vaultId}/lease`,
+      headers: { Cookie: cookie },
+      payload: { task_id: 't1', key_names: ['K'] },
+    });
+    expect(leaseRes.statusCode).toBe(403);
+    expect(leaseRes.json().error).toMatch(/personal/i);
+  });
+});

@@ -10,7 +10,8 @@
     "start": "NODE_ENV=production next start",
     "electron:dev": "electron .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "vault:add": "node scripts/vault-add.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

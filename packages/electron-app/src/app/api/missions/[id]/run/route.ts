@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { Missions, MissionJobs } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import { readAllPersonalSecrets } from '@/lib/personal-vault';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -51,6 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!routing.length) return Response.json({ ok: false, error: '라우팅 없음' }, { status: 400 });
 
   const cookie = getVmSessionCookie(req);
+
+  // Personal Vault 시크릿을 환경변수로 수집
+  const vaultEnv = await collectPersonalVaultEnv(user.id, cookie);
 
   // 잡 + vm-server 태스크 생성
   const jobIds: string[] = [];
@@ -108,7 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try {
           // vm-server에서 에이전트 정보 가져오기
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
-          const output = await runAgentTask(r, mission.task, agent, id);
+          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv);
 
           MissionJobs.finish(jobId, output);
           if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'completed', result: output }, cookie);
@@ -162,14 +166,49 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
+// ── Personal Vault 환경변수 수집 ──────────────────────────────────────
+async function collectPersonalVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
+  try {
+    const res = await fetch(`${VM_URL}/api/vaults`, { headers: { Cookie: cookie } });
+    if (!res.ok) return {};
+    const vaults = await res.json() as { id: string; scope: string }[];
+    const personalVaults = vaults.filter(v => v.scope === 'personal_meta');
+    if (!personalVaults.length) return {};
+
+    const envVars: Record<string, string> = {};
+    await Promise.all(personalVaults.map(async vault => {
+      const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
+      if (!secretsRes.ok) return;
+      const secrets = await secretsRes.json() as { key_name: string }[];
+      const keyNames = secrets.map(s => s.key_name);
+      if (!keyNames.length) return;
+      const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
+      Object.assign(envVars, values);
+    }));
+
+    return envVars;
+  } catch {
+    return {};
+  }
+}
+
 // ── Claude CLI 호출 ────────────────────────────────────────────────────
-async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [], allowTools = false, imagePaths: string[] = []): Promise<string> {
+async function callClaude(
+  prompt: string,
+  cwd: string,
+  modelArgs: string[] = [],
+  allowTools = false,
+  imagePaths: string[] = [],
+  extraEnv: Record<string, string> = {},
+): Promise<string> {
   const toolArgs = allowTools ? ['--allowedTools', 'Edit,Write,Read,Bash', '--dangerously-skip-permissions'] : [];
   let lastErr: Error | null = null;
   for (let i = 0; i < 2; i++) {
     try {
       const { stdout } = await execFileAsync('claude', ['-p', prompt, ...toolArgs, ...modelArgs, ...imagePaths], {
-        cwd, encoding: 'utf8', timeout: 300_000, env: { ...process.env }, maxBuffer: 10 * 1024 * 1024,
+        cwd, encoding: 'utf8', timeout: 300_000,
+        env: { ...process.env, ...extraEnv },
+        maxBuffer: 10 * 1024 * 1024,
       });
       return stdout.trim();
     } catch (e: unknown) {
@@ -184,7 +223,7 @@ async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [],
 }
 
 // ── 에이전트 작업 실행 ─────────────────────────────────────────────────
-async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string): Promise<string> {
+async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}): Promise<string> {
   let wsPath = process.cwd();
   if (agent) {
     // vm-server에서 workspace path를 가져오기 위해 agent.workspace_id 사용
@@ -213,7 +252,7 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 
 지금 바로 시작하세요:`;
 
-  return callClaude(prompt, wsPath, modelArgs, true, imagePaths);
+  return callClaude(prompt, wsPath, modelArgs, true, imagePaths, extraEnv);
 }
 
 // ── 최종 통합 문서 ─────────────────────────────────────────────────────

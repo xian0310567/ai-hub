@@ -3,11 +3,12 @@
  * - vm-server에 호스트 등록
  * - 30초 heartbeat
  * - 5초마다 작업 큐 폴링
- * - Claude CLI로 작업 실행
+ * - Claude CLI로 작업 실행 (Personal Vault 시크릿 환경변수 주입)
  * - 결과 vm-server에 push
  */
 
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -18,9 +19,67 @@ const SESSION_FILE = path.join(DATA_DIR, 'daemon-session.json');
 
 let hostId = null;
 let sessionCookie = null;
+let currentUserId = null; // personal vault 조회용
 let heartbeatTimer = null;
 let pollTimer = null;
 let isRunning = false;
+
+// ─────────────────────────────────────────────────────
+// Personal Vault 파일 폴백 읽기
+// (keytar는 CJS 데몬에서 사용 어려움 — 파일 폴백으로 읽음)
+// ─────────────────────────────────────────────────────
+function readPersonalVaultStore() {
+  const filePath = path.join(DATA_DIR, 'personal-vault.enc');
+  try {
+    const raw = fs.readFileSync(filePath);
+    const key = crypto
+      .createHash('sha256')
+      .update(`ai-hub:personal-vault:${DATA_DIR}`)
+      .digest();
+    const iv = raw.subarray(0, 12);
+    const authTag = raw.subarray(12, 28);
+    const encrypted = raw.subarray(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+    return JSON.parse(plaintext);
+  } catch {
+    return {};
+  }
+}
+
+async function collectPersonalVaultEnv() {
+  if (!currentUserId || !sessionCookie) return {};
+  try {
+    const res = await fetch(`${VM_URL}/api/vaults`, {
+      headers: { Cookie: `session=${sessionCookie}` },
+    });
+    if (!res.ok) return {};
+    const vaults = await res.json();
+    const personalVaults = vaults.filter(v => v.scope === 'personal_meta');
+    if (!personalVaults.length) return {};
+
+    const store = readPersonalVaultStore();
+    const envVars = {};
+
+    for (const vault of personalVaults) {
+      const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, {
+        headers: { Cookie: `session=${sessionCookie}` },
+      });
+      if (!secretsRes.ok) continue;
+      const secrets = await secretsRes.json();
+      for (const secret of secrets) {
+        const storeKey = `${currentUserId}/${vault.id}/${secret.key_name}`;
+        if (store[storeKey] !== undefined) {
+          envVars[secret.key_name] = store[storeKey];
+        }
+      }
+    }
+    return envVars;
+  } catch {
+    return {};
+  }
+}
 
 // ─────────────────────────────────────────────────────
 // 세션 읽기 (Next.js 로그인 후 파일에 저장된 vm_session)
@@ -84,21 +143,25 @@ async function sendHeartbeat() {
 }
 
 // ─────────────────────────────────────────────────────
-// 작업 실행 (Claude CLI spawn)
+// 작업 실행 (Claude CLI spawn + Personal Vault 환경변수 주입)
 // ─────────────────────────────────────────────────────
-function runTask(task) {
+async function runTask(task) {
+  const { title, description, agent_id } = task;
+  const prompt = description || title;
+
+  // 작업 디렉토리: DATA_DIR/workspaces/<agent_id> 또는 fallback
+  const cwd = path.join(DATA_DIR, 'workspaces', agent_id || 'default');
+  if (!fs.existsSync(cwd)) fs.mkdirSync(cwd, { recursive: true });
+
+  // Personal Vault 시크릿 수집
+  const vaultEnv = await collectPersonalVaultEnv();
+
+  const args = ['-p', prompt, '--output-format', 'text'];
+  const timeout = 10 * 60 * 1000; // 10분
+  const env = { ...process.env, ...vaultEnv };
+
   return new Promise((resolve) => {
-    const { id, title, description, agent_id } = task;
-    const prompt = description || title;
-
-    // 작업 디렉토리: DATA_DIR/workspaces/<agent_id> 또는 fallback
-    const cwd = path.join(DATA_DIR, 'workspaces', agent_id || 'default');
-    if (!fs.existsSync(cwd)) fs.mkdirSync(cwd, { recursive: true });
-
-    const args = ['-p', prompt, '--output-format', 'text'];
-    const timeout = 10 * 60 * 1000; // 10분
-
-    execFile('claude', args, { cwd, encoding: 'utf8', timeout, env: { ...process.env } },
+    execFile('claude', args, { cwd, encoding: 'utf8', timeout, env },
       (err, stdout, stderr) => {
         if (err) {
           resolve({ ok: false, result: stderr || err.message });
@@ -133,7 +196,7 @@ async function pollTasks() {
     body: { id: task.id, status: 'running' },
   });
 
-  // Claude CLI 실행
+  // Claude CLI 실행 (Personal Vault 환경변수 주입 포함)
   const { ok, result } = await runTask(task);
 
   // 결과 push
@@ -170,6 +233,10 @@ async function start() {
     watchSessionFile();
     return;
   }
+
+  // 현재 사용자 ID 로드 (personal vault 조회용)
+  const me = await vmFetch('/api/auth/me');
+  if (me?.id) currentUserId = me.id;
 
   const registered = await registerHost();
   if (!registered) {

@@ -111,7 +111,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS agents (
     id              TEXT PRIMARY KEY,
     org_id          TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_id    TEXT,  -- workspace 또는 division ID (division 에이전트는 division ID 저장, FK 없음)
     team_id         TEXT REFERENCES teams(id) ON DELETE SET NULL,
     part_id         TEXT REFERENCES parts(id) ON DELETE SET NULL,
     parent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
@@ -293,6 +293,44 @@ db.exec(`
     value TEXT NOT NULL
   );
 `);
+
+// ─────────────────────────────────────────────────────
+// 마이그레이션: agents.workspace_id FK 제약 제거
+// (division 에이전트는 workspace 대신 division ID를 workspace_id에 저장)
+// ─────────────────────────────────────────────────────
+{
+  const hasFk = (db.prepare('PRAGMA foreign_key_list(agents)').all() as Array<{from: string}>)
+    .some(fk => fk.from === 'workspace_id');
+
+  if (hasFk) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE agents_new (
+        id              TEXT PRIMARY KEY,
+        org_id          TEXT NOT NULL,
+        workspace_id    TEXT,
+        team_id         TEXT,
+        part_id         TEXT,
+        parent_agent_id TEXT,
+        org_level       TEXT NOT NULL DEFAULT 'worker',
+        is_lead         INTEGER NOT NULL DEFAULT 0,
+        name            TEXT NOT NULL,
+        emoji           TEXT NOT NULL DEFAULT '🤖',
+        color           TEXT NOT NULL DEFAULT '#6b7280',
+        soul            TEXT NOT NULL DEFAULT '',
+        command_name    TEXT,
+        harness_pattern TEXT NOT NULL DEFAULT 'orchestrator',
+        model           TEXT NOT NULL DEFAULT 'claude-sonnet-4-5',
+        created_at      INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `);
+    db.exec(`INSERT OR IGNORE INTO agents_new SELECT * FROM agents`);
+    db.exec(`DROP TABLE agents`);
+    db.exec(`ALTER TABLE agents_new RENAME TO agents`);
+    db.pragma('foreign_keys = ON');
+    console.log('[schema] agents 테이블 마이그레이션 완료 (workspace_id FK 제거)');
+  }
+}
 
 // ─────────────────────────────────────────────────────
 // 유틸: 서버 시작 시 crashed 작업 정리

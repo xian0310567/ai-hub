@@ -30,6 +30,11 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
     throw new Error('Unauthorized');
   }
 
+  if (!row.org_id) {
+    reply.code(403).send({ error: 'No organization membership. Contact your admin.' });
+    throw new Error('No org');
+  }
+
   return {
     userId: row.user_id,
     username: row.username,

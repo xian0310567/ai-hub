@@ -249,11 +249,8 @@ export async function PATCH(req: NextRequest) {
     fs.writeFileSync(path.join(wsPath, '.claude', 'agents', `${cmd}.md`),
       `---\nname: ${cmd}\ndescription: "${name}"\n---\n\n${soul}`, 'utf8');
 
-    // 기존 리더 에이전트 조회
-    const agentEp = org_type === 'division'
-      ? `/api/agents?workspace_id=${org_id}`
-      : `/api/agents?workspace_id=${org_id}`;
-    const existingAgents = await vmGet<VmAgent[]>(agentEp, cookie) ?? [];
+    // 기존 리더 에이전트 조회 (division/department 모두 org_id를 workspace_id에 저장)
+    const existingAgents = await vmGet<VmAgent[]>(`/api/agents?workspace_id=${org_id}`, cookie) ?? [];
     const existing = existingAgents.find(a => a.org_level === org_type);
 
     if (existing) {

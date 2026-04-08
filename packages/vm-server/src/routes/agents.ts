@@ -27,11 +27,11 @@ export async function agentRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     const { workspace_id, team_id, part_id, parent_agent_id, org_level, is_lead,
             name, emoji, color, soul, command_name, harness_pattern, model } = req.body as {
-      workspace_id: string; team_id?: string; part_id?: string; parent_agent_id?: string;
+      workspace_id?: string; team_id?: string; part_id?: string; parent_agent_id?: string;
       org_level?: string; is_lead?: boolean; name: string; emoji?: string; color?: string;
       soul?: string; command_name?: string; harness_pattern?: string; model?: string;
     };
-    if (!workspace_id || !name) return reply.code(400).send({ error: 'workspace_id and name required' });
+    if (!name) return reply.code(400).send({ error: 'name required' });
 
     const id = newId();
     db.prepare(`

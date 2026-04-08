@@ -6,10 +6,14 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
+    "pg": "^8.13.3",
+    "@anthropic-ai/sdk": "^0.52.0",
+    "cron-parser": "^4.9.0",
     "fastify": "^5.3.3",
     "@fastify/cors": "^10.0.2",
     "@fastify/cookie": "^11.0.2",
@@ -17,9 +21,11 @@
     "zod": "^3.25.28"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/pg": "^8.11.10",
     "@types/node": "^20",
+    "pg-mem": "^2.8.1",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.0"
   }
 }

@@ -1,4 +1,4 @@
-import { db } from './schema.js';
+import { q1, now } from './pool.js';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 
 export interface SessionUser {
@@ -15,15 +15,14 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
     throw new Error('Unauthorized');
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  const row = db.prepare(`
+  const row = await q1<{ user_id: string; username: string; org_id: string; role: string }>(`
     SELECT s.user_id, u.username, om.org_id, om.role
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     LEFT JOIN org_members om ON om.user_id = u.id
     WHERE s.id = ? AND s.expires_at > ?
     LIMIT 1
-  `).get(sessionId, now) as { user_id: string; username: string; org_id: string; role: string } | undefined;
+  `, [sessionId, now()]);
 
   if (!row) {
     reply.code(401).send({ error: 'Session expired' });

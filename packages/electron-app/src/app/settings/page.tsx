@@ -355,8 +355,107 @@ function OrgMembersTab({ userRole, orgId }: { userRole: string; orgId: string })
   );
 }
 
-// ── 팀 멤버 API 프록시 (electron-app → vm-server) ──
-// /api/teams/:id/members 라우트가 필요 — 아래 내용은 별도 route.ts로 분리됨
+// ── 백업 탭 ──────────────────────────────────────────────────────
+interface BackupEntry { timestamp: string; size: number; created_at: number; }
+
+function BackupTab() {
+  const [backups,  setBackups]  = useState<BackupEntry[]>([]);
+  const [loading,  setLoading]  = useState(false);
+  const [running,  setRunning]  = useState(false);
+  const [lastMsg,  setLastMsg]  = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const r = await fetch('/api/backup').then(r => r.json()).catch(() => ({ ok: false }));
+    setLoading(false);
+    if (r.ok) setBackups(r.backups ?? []);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const runBackup = async () => {
+    setRunning(true);
+    setLastMsg('');
+    const r = await fetch('/api/backup', { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false }));
+    setRunning(false);
+    if (r.ok) {
+      setLastMsg(`백업 완료: ${r.timestamp}`);
+      load();
+    } else {
+      setLastMsg('백업 실패: ' + (r.error ?? '알 수 없는 오류'));
+    }
+  };
+
+  const fmtSize = (b: number) => b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(2)} MB`;
+  const fmtTs   = (ts: string) => {
+    const parts = ts.replace('T', ' ').split('-');
+    return `${parts[0]}-${parts[1]}-${parts[2]} ${parts[3]}:${parts[4]}`;
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <span style={S.sec}>SQLite 백업</span>
+        <button style={{ ...S.btn, marginLeft: 'auto' }} onClick={runBackup} disabled={running}>
+          {running ? '백업 중...' : '지금 백업'}
+        </button>
+        <button style={S.btnSm} onClick={load}>새로고침</button>
+      </div>
+      <div style={S.hint}>
+        트레이 최소화 상태에서 1시간마다 자동 백업됩니다. 최대 10개를 보관하며, 새 PC에서 복원할 수 있습니다.
+      </div>
+
+      {lastMsg && (
+        <div style={{ fontSize: 12, color: lastMsg.startsWith('백업 완료') ? 'var(--accent)' : 'var(--danger)', marginBottom: 12, padding: '8px 12px', background: 'var(--bg-elevated)', borderRadius: 6 }}>
+          {lastMsg}
+        </div>
+      )}
+
+      {loading && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>로딩 중...</div>}
+
+      {backups.length === 0 && !loading ? (
+        <div style={{ ...S.card, padding: '32px', textAlign: 'center' as const }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>💾</div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>백업 기록이 없습니다</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>우측 상단의 "지금 백업" 버튼을 눌러 시작하세요</div>
+        </div>
+      ) : (
+        <div style={S.card}>
+          <div style={{ ...S.tblHdr, gridTemplateColumns: '2.5fr 1fr 1fr' }}>
+            <span>백업 시각</span><span>크기</span><span>다운로드</span>
+          </div>
+          {backups.map((b, i) => (
+            <div key={b.timestamp} style={{ ...S.tblRow, gridTemplateColumns: '2.5fr 1fr 1fr' }}
+              onMouseOver={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
+              <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-primary)' }}>
+                {fmtTs(b.timestamp)}
+                {i === 0 && <span style={{ marginLeft: 8, fontSize: 10, color: 'var(--accent)', fontFamily: 'sans-serif', fontWeight: 700 }}>최신</span>}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{fmtSize(b.size)}</span>
+              <span>
+                <a href={`/api/backup?download=${b.timestamp}`} download
+                  style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>
+                  다운로드
+                </a>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ ...S.card, padding: '14px 16px', marginTop: 16, background: 'var(--bg-elevated)' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8 }}>복원 방법</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.8 }}>
+          1. 새 PC에 AI Hub를 설치하고 동일 계정으로 로그인합니다<br />
+          2. 설정 → 백업 탭에서 원하는 백업을 다운로드합니다<br />
+          3. 다운로드된 <code style={{ fontFamily: 'monospace', background: 'var(--bg-canvas)', padding: '1px 5px', borderRadius: 3 }}>.db</code> 파일을 <code style={{ fontFamily: 'monospace', background: 'var(--bg-canvas)', padding: '1px 5px', borderRadius: 3 }}>.data/local.db</code>로 교체합니다<br />
+          4. 앱을 재시작합니다
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── 메인 페이지 ───────────────────────────────────────────────────
 const TABS = [
@@ -364,6 +463,7 @@ const TABS = [
   { id: 'audit',      label: '📋 Audit Log' },
   { id: 'team-members', label: '👥 팀 멤버십' },
   { id: 'org-members',  label: '🏢 조직 멤버' },
+  { id: 'backup',       label: '💾 백업' },
 ];
 
 function SettingsContent() {
@@ -421,10 +521,11 @@ function SettingsContent() {
 
         {/* Content */}
         <div style={S.main}>
-          {tab === 'hosts'       && <HostsTab />}
-          {tab === 'audit'       && <AuditTab />}
+          {tab === 'hosts'        && <HostsTab />}
+          {tab === 'audit'        && <AuditTab />}
           {tab === 'team-members' && <TeamMembersTab userRole={userRole} orgId={orgId} />}
-          {tab === 'org-members' && <OrgMembersTab userRole={userRole} orgId={orgId} />}
+          {tab === 'org-members'  && <OrgMembersTab userRole={userRole} orgId={orgId} />}
+          {tab === 'backup'       && <BackupTab />}
         </div>
       </div>
     </div>

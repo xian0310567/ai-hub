@@ -4,7 +4,7 @@ import { getSession } from '@/lib/auth';
 import { randomUUID } from 'crypto';
 
 export async function GET(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   const notifications = Notifications.list(user.id);
   const unread = Notifications.unreadCount(user.id);
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   const { type, title, message } = await req.json();
   const id = randomUUID();
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   const { id, all } = await req.json();
   if (all) Notifications.markAllRead(user.id);
@@ -30,7 +30,7 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return Response.json({ ok: false, error: 'id required' }, { status: 400 });

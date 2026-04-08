@@ -9,7 +9,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; filename: string }> }
 ) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { id, filename } = await params;

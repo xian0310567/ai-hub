@@ -27,7 +27,7 @@ function readSoul(wsPath: string, cmdName: string | null): string {
 
 // GET /api/agents/soul?id=xxx
 export async function GET(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const id = new URL(req.url).searchParams.get('id');
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 
 // PATCH /api/agents/soul — 소울 파일 저장
 export async function PATCH(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { id, soul } = await req.json();

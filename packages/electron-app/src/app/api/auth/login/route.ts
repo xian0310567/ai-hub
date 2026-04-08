@@ -5,7 +5,7 @@ import fs from 'fs';
 
 // GET /api/auth/login — claude login 실행, URL 스트리밍
 export async function GET(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const claudeConfigDir = getUserClaudeConfigDir(user.id);

@@ -115,7 +115,7 @@ function runClaude(
 
 // ── POST /api/claude/[agentId] ───────────────────────────────────────
 export async function POST(req: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { agentId } = await params;
@@ -186,7 +186,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
 
 // ── GET /api/claude/[agentId] — 세션 상태 ───────────────────────────
 export async function GET(req: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { agentId } = await params;

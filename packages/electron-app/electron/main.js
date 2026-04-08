@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell } = require('electron
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const daemon = require('./daemon');
 
 const NEXT_PORT = 3000;
 const isDev = process.env.NODE_ENV !== 'production';
@@ -12,10 +13,10 @@ let nextProcess = null;
 let isQuitting = false;
 
 // ─────────────────────────────────────────────────────
-// Next.js 서버 시작 (프로덕션 전용 — dev는 별도로 띄움)
+// Next.js 서버 시작 (프로덕션 전용)
 // ─────────────────────────────────────────────────────
 function startNextServer() {
-  if (isDev) return Promise.resolve(); // dev 모드는 `next dev`로 별도 실행
+  if (isDev) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
     const appRoot = path.join(__dirname, '..');
@@ -25,32 +26,20 @@ function startNextServer() {
     });
 
     nextProcess.stdout.on('data', (data) => {
-      const msg = data.toString();
-      if (msg.includes('Ready')) resolve();
+      if (data.toString().includes('Ready')) resolve();
     });
-
-    nextProcess.stderr.on('data', (data) => {
-      console.error('[next]', data.toString());
-    });
-
+    nextProcess.stderr.on('data', (data) => console.error('[next]', data.toString()));
     nextProcess.on('error', reject);
-
-    // 타임아웃 fallback
     setTimeout(resolve, 5000);
   });
 }
 
-// ─────────────────────────────────────────────────────
-// Next.js가 응답할 때까지 대기
-// ─────────────────────────────────────────────────────
 function waitForNext(retries = 20) {
   return new Promise((resolve) => {
     const tryConnect = (n) => {
-      http.get(`http://localhost:${NEXT_PORT}`, (res) => {
-        resolve();
-      }).on('error', () => {
+      http.get(`http://localhost:${NEXT_PORT}`, () => resolve()).on('error', () => {
         if (n > 0) setTimeout(() => tryConnect(n - 1), 500);
-        else resolve(); // 포기하고 진행
+        else resolve();
       });
     };
     tryConnect(retries);
@@ -58,7 +47,7 @@ function waitForNext(retries = 20) {
 }
 
 // ─────────────────────────────────────────────────────
-// 메인 윈도우 생성
+// 메인 윈도우
 // ─────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -75,18 +64,13 @@ function createWindow() {
   });
 
   mainWindow.loadURL(`http://localhost:${NEXT_PORT}`);
+  mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
-
-  // 외부 링크는 기본 브라우저로
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  // 닫기 버튼 → 트레이로 최소화 (완전 종료 X)
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -98,8 +82,13 @@ function createWindow() {
 // ─────────────────────────────────────────────────────
 // 시스템 트레이
 // ─────────────────────────────────────────────────────
+function updateTrayStatus(status) {
+  const labels = { idle: '대기 중', busy: '작업 중', offline: '오프라인' };
+  if (tray) tray.setToolTip(`AI Hub — ${labels[status] || status}`);
+}
+
 function createTray() {
-  const icon = nativeImage.createEmpty(); // TODO: 실제 아이콘으로 교체
+  const icon = nativeImage.createEmpty();
   tray = new Tray(icon);
 
   const menu = Menu.buildFromTemplate([
@@ -109,7 +98,7 @@ function createTray() {
   ]);
 
   tray.setContextMenu(menu);
-  tray.setToolTip('AI Hub');
+  tray.setToolTip('AI Hub — 시작 중');
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
@@ -121,21 +110,22 @@ app.whenReady().then(async () => {
   await waitForNext();
   createTray();
   createWindow();
+
+  // 데몬 시작
+  daemon.start();
+  updateTrayStatus('idle');
 });
 
 app.on('window-all-closed', (e) => {
-  // macOS: 모든 창이 닫혀도 앱 유지 (트레이에서 관리)
-  e.preventDefault();
+  e.preventDefault(); // 트레이에서 계속 실행
 });
 
 app.on('before-quit', () => {
   isQuitting = true;
+  daemon.stop();
   if (nextProcess) nextProcess.kill();
 });
 
 app.on('activate', () => {
-  // macOS: dock 아이콘 클릭 시 창 복원
-  if (mainWindow) {
-    mainWindow.show();
-  }
+  if (mainWindow) mainWindow.show();
 });

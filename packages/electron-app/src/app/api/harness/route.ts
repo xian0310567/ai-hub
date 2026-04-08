@@ -41,7 +41,7 @@ const HARNESS_KNOWLEDGE = `
 // 부문/실: 리더 역할 정의 (소울 생성)
 // 팀: 멀티 에이전트 팀 구조 설계
 export async function POST(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { task, org_id, org_type, org_name } = await req.json() as {
@@ -161,7 +161,7 @@ ${task}
 
 // ── PATCH /api/harness — 적용 ────────────────────────────────────────
 export async function PATCH(req: NextRequest) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { org_id, org_type, org_name, task, design, mode } = await req.json() as {

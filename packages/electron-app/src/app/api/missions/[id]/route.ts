@@ -4,7 +4,7 @@ import { getSession } from '@/lib/auth';
 
 // GET /api/missions/[id] — 미션 상세 조회
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;

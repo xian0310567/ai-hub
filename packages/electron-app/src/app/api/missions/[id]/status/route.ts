@@ -20,7 +20,7 @@ interface Progress {
 
 // GET /api/missions/[id]/status — 미션 진행 상태 조회
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = getSession(req);
+  const user = await getSession(req);
   if (!user) {
     return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   }

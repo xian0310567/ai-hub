@@ -116,14 +116,13 @@ async function checkVaultExpiry() {
       if (daysLeft < 0 || daysLeft > 7) continue;
 
       // 7일, 3일, 당일(0일) 알림
-      const targets = [7, 3, 0].filter(d => d >= daysLeft && daysLeft <= d);
-      const threshold = targets[0]; // 가장 촉박한 것
-      if (threshold === undefined) continue;
+      // 7일, 3일, 당일에만 알림 (정확히 해당 일에만)
+      if (![7, 3, 0].includes(daysLeft)) continue;
 
-      const key = `${vault.id}_${threshold}_${todayStr}`;
+      const key = `${vault.id}_${daysLeft}_${todayStr}`;
       if (sent[key]) continue; // 오늘 이미 보냄
 
-      const label = threshold === 0 ? '오늘 만료' : `${daysLeft}일 후 만료`;
+      const label = daysLeft === 0 ? '오늘 만료' : `${daysLeft}일 후 만료`;
       const title = `Vault 만료 알림: ${vault.name}`;
       const body  = `"${vault.name}" vault가 ${label}됩니다. 갱신이 필요하면 확인해주세요.`;
 

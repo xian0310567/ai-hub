@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
     '/_global-error': ['**/*'],
   },
   skipTrailingSlashRedirect: true,
-  skipMiddlewareUrlNormalize: true,
+  skipProxyUrlNormalize: true,
 };
 
 export default nextConfig;

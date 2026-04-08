@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { q1, qall, exec, buildWhere, newId, now } from '../db/pool.js';
+import { getPool, q1, qall, exec, buildWhere, newId, now } from '../db/pool.js';
 import { requireAuth } from '../db/auth.js';
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -32,7 +32,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const targetTrigger = trigger_type ?? 'interactive';
 
     // SELECT ... FOR UPDATE SKIP LOCKED: 동시 폴링 시 중복 취득 방지
-    const result = await getPool_().query(`
+    const result = await getPool().query(`
       UPDATE tasks SET status = 'assigned', assigned_host_id = $1
       WHERE id = (
         SELECT id FROM tasks
@@ -105,7 +105,3 @@ export async function taskRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 }
-
-// 내부용: FOR UPDATE SKIP LOCKED 쿼리에 pool 직접 사용
-import { getPool } from '../db/pool.js';
-function getPool_() { return getPool(); }

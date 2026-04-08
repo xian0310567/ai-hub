@@ -14,8 +14,10 @@ import { vaultRoutes } from './routes/vaults.js';
 import { auditRoutes } from './routes/audit.js';
 import { partRoutes } from './routes/parts.js';
 import { webhookRoutes } from './routes/webhooks.js';
+import { backupRoutes } from './routes/backup.js';
 import { startFallbackDaemon } from './workers/fallback.js';
 import { startScheduler } from './workers/scheduler.js';
+import { startPgBackup } from './workers/pg-backup.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -47,6 +49,7 @@ await app.register(vaultRoutes,     { prefix: '/api/vaults' });
 await app.register(auditRoutes,     { prefix: '/api/audit' });
 await app.register(partRoutes,      { prefix: '/api/parts' });
 await app.register(webhookRoutes,   { prefix: '/api/webhooks' });
+await app.register(backupRoutes,    { prefix: '/api/backup' });
 
 try {
   // DB 스키마 초기화 (PostgreSQL)
@@ -58,6 +61,7 @@ try {
   // 백그라운드 워커 시작
   startFallbackDaemon();
   startScheduler();
+  startPgBackup();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

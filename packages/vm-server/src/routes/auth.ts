@@ -26,6 +26,8 @@ export async function authRoutes(app: FastifyInstance) {
     await exec('INSERT INTO users(id,username,password_hash) VALUES(?,?,?)', [userId, username, `${salt}:${hash}`]);
 
     let orgId: string | null = null;
+    let role = 'member';
+
     if (orgSlug) {
       const org = await q1<{ id: string }>('SELECT id FROM organizations WHERE slug = ?', [orgSlug]);
       orgId = org?.id ?? null;
@@ -34,12 +36,20 @@ export async function authRoutes(app: FastifyInstance) {
       orgId = org?.id ?? null;
     }
 
-    if (orgId) {
+    // 조직이 없으면 기본 조직 자동 생성 (첫 번째 유저 = org_admin)
+    if (!orgId) {
+      orgId = newId();
       await exec(
-        'INSERT INTO org_members(id,org_id,user_id,role) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
-        [newId(), orgId, userId, 'member'],
+        'INSERT INTO organizations(id,name,slug) VALUES(?,?,?)',
+        [orgId, 'AI 사업부', 'default'],
       );
+      role = 'org_admin';
     }
+
+    await exec(
+      'INSERT INTO org_members(id,org_id,user_id,role) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
+      [newId(), orgId, userId, role],
+    );
 
     return reply.code(201).send({ ok: true });
   });
@@ -55,6 +65,21 @@ export async function authRoutes(app: FastifyInstance) {
     const [salt, stored] = user.password_hash.split(':');
     if (hashPassword(password, salt) !== stored)
       return reply.code(401).send({ error: 'Invalid credentials' });
+
+    // org 멤버십이 없는 기존 유저 → 자동 연결
+    const membership = await q1('SELECT id FROM org_members WHERE user_id = ?', [user.id]);
+    if (!membership) {
+      let org = await q1<{ id: string }>('SELECT id FROM organizations ORDER BY created_at LIMIT 1');
+      if (!org) {
+        const orgId = newId();
+        await exec('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)', [orgId, 'AI 사업부', 'default']);
+        org = { id: orgId };
+      }
+      await exec(
+        'INSERT INTO org_members(id,org_id,user_id,role) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
+        [newId(), org.id, user.id, 'org_admin'],
+      );
+    }
 
     const sessionId = newId();
     const expiresAt = now() + 60 * 60 * 24 * 30;

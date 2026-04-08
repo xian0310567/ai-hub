@@ -3,9 +3,13 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import os from 'os';
+import path from 'path';
 import { buildApp } from './helpers/app.js';
 import { clearDb, seedUser, q1, newId } from './helpers/db.js';
 import { getPool } from '../db/pool.js';
+
+const TEST_DIR = path.join(os.tmpdir(), 'aihub-test');
 
 let app: FastifyInstance;
 
@@ -18,11 +22,11 @@ async function createWorkspace(orgId: string) {
   const wsId = newId();
   await getPool().query(
     'INSERT INTO divisions(id,org_id,name,ws_path) VALUES($1,$2,$3,$4)',
-    [divId, orgId, 'Div', '/tmp'],
+    [divId, orgId, 'Div', TEST_DIR],
   );
   await getPool().query(
     'INSERT INTO workspaces(id,org_id,division_id,name,path) VALUES($1,$2,$3,$4,$5)',
-    [wsId, orgId, divId, 'WS', '/tmp/ws'],
+    [wsId, orgId, divId, 'WS', path.join(TEST_DIR, 'ws')],
   );
   return wsId;
 }

@@ -13,7 +13,7 @@ interface OrgMember { id: string; username: string; role: string; joined_at: num
 // ── 공통 스타일 ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
   page:   { minHeight: '100vh', background: 'var(--bg-canvas)', color: 'var(--text-primary)', fontFamily: "'Inter', -apple-system, sans-serif", display: 'flex', flexDirection: 'column' },
-  hdr:    { height: 44, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
+  hdr:    { height: 54, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
   body:   { display: 'flex', flex: 1, overflow: 'hidden' },
   nav:    { width: 180, borderRight: '1px solid var(--border)', background: 'var(--bg-panel)', padding: '12px 0', flexShrink: 0 },
   main:   { flex: 1, overflowY: 'auto' as const, padding: '24px 28px' },
@@ -503,7 +503,7 @@ function SettingsContent() {
 
       <div style={S.body}>
         {/* Side nav */}
-        <nav style={S.nav}>
+        <div style={S.nav}>
           {TABS.map(t => (
             <button key={t.id} style={{
               ...S.navItem,
@@ -517,7 +517,7 @@ function SettingsContent() {
               {t.label}
             </button>
           ))}
-        </nav>
+        </div>
 
         {/* Content */}
         <div style={S.main}>

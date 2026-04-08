@@ -13,7 +13,7 @@ const SCOPE_COLOR: Record<string, string> = { org: '#0d99ff', team: '#9747ff', p
 
 const s: Record<string, React.CSSProperties> = {
   page:    { minHeight: '100vh', background: 'var(--bg-canvas)', color: 'var(--text-primary)', fontFamily: "'Inter', -apple-system, sans-serif", display: 'flex', flexDirection: 'column' },
-  header:  { height: 44, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
+  header:  { height: 54, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
   body:    { display: 'flex', flex: 1, overflow: 'hidden' },
   sidebar: { width: 260, borderRight: '1px solid var(--border)', background: 'var(--bg-panel)', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   main:    { flex: 1, overflow: 'auto', padding: 24 },

@@ -82,7 +82,7 @@ export default function TasksPage() {
   return (
     <div style={{minHeight:'100vh',background:'var(--bg-canvas)'}}>
       {/* 헤더 */}
-      <div style={{height:44,display:'flex',alignItems:'center',gap:12,padding:'0 24px',borderBottom:'1px solid var(--border)',background:'var(--bg-panel)',position:'sticky',top:0,zIndex:100}}>
+      <div style={{height:54,display:'flex',alignItems:'center',gap:12,padding:'0 24px',borderBottom:'1px solid var(--border)',background:'var(--bg-panel)',position:'sticky',top:0,zIndex:100}}>
         <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-muted)',textDecoration:'none'}} onMouseOver={e=>e.currentTarget.style.color='var(--text-primary)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>← 대시보드</a>
         <span style={{color:'var(--border)'}}>|</span>
         <span style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>태스크</span>

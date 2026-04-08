@@ -234,7 +234,9 @@ async function runTask(task) {
   const env = { ...process.env, ...vaultEnv };
 
   return new Promise((resolve) => {
-    execFile('claude', args, { cwd, encoding: 'utf8', timeout: 10 * 60 * 1000, env },
+    const isWin = process.platform === 'win32';
+    const cmd  = isWin ? 'claude.cmd' : 'claude';
+    execFile(cmd, args, { cwd, encoding: 'utf8', timeout: 10 * 60 * 1000, env, shell: isWin },
       (err, stdout, stderr) => {
         if (err) resolve({ ok: false, result: stderr || err.message });
         else     resolve({ ok: true,  result: stdout.trim() });

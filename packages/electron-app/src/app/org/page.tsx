@@ -422,8 +422,7 @@ function AddForm({ form, onClose, onDone }: { form:FormState; onClose:()=>void; 
       }
 
       const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-      const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.error || `HTTP ${r.status}`); }
       onDone();
     } catch (e:any) { setErr(e.message||'오류 발생'); }
     setLoading(false);

@@ -4,12 +4,40 @@
  * 기본값: 6시간마다, 최대 7개 보관.
  */
 
-import { exec as execCmd } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 
-const execAsync = promisify(execCmd);
+const execFileAsync = promisify(execFileCb);
+
+// pg_dump 탐색: 환경변수 → OS별 일반 경로 → PATH fallback
+const isWin = process.platform === 'win32';
+const PG_DUMP_SEARCH: string[] = [
+  process.env.PG_DUMP_PATH,
+  // macOS / Linux
+  ...(!isWin ? [
+    '/opt/homebrew/opt/libpq/bin/pg_dump',
+    '/opt/homebrew/bin/pg_dump',
+    '/usr/local/opt/libpq/bin/pg_dump',
+    '/usr/local/bin/pg_dump',
+    '/usr/bin/pg_dump',
+  ] : []),
+  // Windows: 일반적인 PostgreSQL 설치 경로
+  ...(isWin ? [
+    ...['17','16','15','14'].flatMap(v => [
+      `C:\\Program Files\\PostgreSQL\\${v}\\bin\\pg_dump.exe`,
+      `C:\\Program Files (x86)\\PostgreSQL\\${v}\\bin\\pg_dump.exe`,
+    ]),
+  ] : []),
+].filter(Boolean) as string[];
+
+function findPgDump(): string {
+  for (const p of PG_DUMP_SEARCH) {
+    if (fs.existsSync(p)) return p;
+  }
+  return isWin ? 'pg_dump.exe' : 'pg_dump'; // fallback: PATH에서 찾기
+}
 
 const DATA_DIR = process.env.DATA_DIR || '.data';
 const PG_BACKUP_DIR = path.join(DATA_DIR, 'backups', 'postgres');
@@ -23,7 +51,8 @@ async function runPgDump(): Promise<void> {
   const url = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/aihub';
 
   try {
-    await execAsync(`pg_dump "${url}" --no-password -f "${outPath}"`);
+    const pgDump = findPgDump();
+    await execFileAsync(pgDump, [url, '--no-password', '-f', outPath]);
     console.log(`[pg-backup] 완료: ${outPath}`);
 
     // 오래된 백업 정리

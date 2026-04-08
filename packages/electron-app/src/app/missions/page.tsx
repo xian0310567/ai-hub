@@ -335,7 +335,7 @@ export default function MissionsPage() {
         </button>
       </nav>
 
-      <div style={{ padding: '24px 32px', maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ padding: '24px 32px', maxWidth: 900, margin: '54px auto 0' }}>
 
         {/* 헤더 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>

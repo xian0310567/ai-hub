@@ -5,6 +5,9 @@ const { spawn } = require('child_process');
 const http = require('http');
 const daemon = require('./daemon');
 
+const isMac  = process.platform === 'darwin';
+const isWin  = process.platform === 'win32';
+
 const NEXT_PORT = 3000;
 const isDev     = process.env.NODE_ENV !== 'production';
 const VM_URL    = process.env.VM_SERVER_URL || 'http://localhost:4000';
@@ -90,9 +93,12 @@ function startNextServer() {
   if (isDev) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const appRoot = path.join(__dirname, '..');
-    nextProcess = spawn('node', ['node_modules/.bin/next', 'start', '--port', String(NEXT_PORT)], {
+    // Windows: .bin/next.cmd, macOS/Linux: .bin/next
+    const nextBin = path.join('node_modules', '.bin', isWin ? 'next.cmd' : 'next');
+    nextProcess = spawn(nextBin, ['start', '--port', String(NEXT_PORT)], {
       cwd: appRoot,
       env: { ...process.env, NODE_ENV: 'production' },
+      shell: isWin, // Windows에서 .cmd 실행에 필요
     });
     nextProcess.stdout.on('data', (data) => { if (data.toString().includes('Ready')) resolve(); });
     nextProcess.stderr.on('data', (data) => console.error('[next]', data.toString()));
@@ -122,7 +128,6 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset',
     webPreferences: { nodeIntegration: false, contextIsolation: true },
     show: false,
   });
@@ -191,10 +196,27 @@ function updateTray() {
 }
 
 function createTray() {
-  const icon = nativeImage.createEmpty();
+  // Windows는 반드시 유효한 아이콘이 필요, macOS는 빈 이미지 가능
+  let icon;
+  const iconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
+  if (fs.existsSync(iconPath)) {
+    icon = nativeImage.createFromPath(iconPath);
+    if (isWin) icon = icon.resize({ width: 16, height: 16 });
+  } else {
+    // 기본 1x1 아이콘 생성 (아이콘 파일 없을 때 fallback)
+    icon = nativeImage.createFromBuffer(
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAADklEQVQ4jWNgGAWDEwAAAhAAATFrFCAAAAAASUVORK5CYII=', 'base64'),
+      { width: 16, height: 16 }
+    );
+  }
   tray = new Tray(icon);
   updateTray();
-  tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
+
+  // macOS: 더블클릭, Windows/Linux: 싱글클릭으로 창 열기
+  tray.on(isMac ? 'double-click' : 'click', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
 
   // 30초마다 트레이 메뉴 갱신 (작업 수 반영)
   setInterval(updateTray, 30 * 1000);
@@ -222,8 +244,12 @@ app.whenReady().then(async () => {
   }
 });
 
+// macOS: 창 닫아도 트레이에서 계속 실행
+// Windows/Linux: 모든 창 닫으면 종료
 app.on('window-all-closed', (e) => {
-  e.preventDefault(); // 트레이에서 계속 실행
+  if (isMac) {
+    e.preventDefault();
+  }
 });
 
 app.on('before-quit', () => {
@@ -234,6 +260,7 @@ app.on('before-quit', () => {
   if (nextProcess) nextProcess.kill();
 });
 
+// macOS: dock 클릭 시 창 다시 표시
 app.on('activate', () => {
   if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
 });

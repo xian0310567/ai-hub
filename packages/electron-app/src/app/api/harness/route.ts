@@ -89,22 +89,31 @@ async function getWsPath(
   orgType: 'division' | 'department' | 'team',
   cookie: string,
 ): Promise<{ wsPath: string; workspaceId?: string } | null> {
+  const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+  const fallback = (id: string) => {
+    const p = path.join(dataDir, 'workspaces', id);
+    fs.mkdirSync(p, { recursive: true });
+    return p;
+  };
+
   if (orgType === 'division') {
     const div = await vmGet<VmDivision>(`/api/divisions/${orgId}`, cookie);
-    if (!div?.ws_path) return null;
-    return { wsPath: div.ws_path };
+    if (!div) return null;
+    const wsPath = div.ws_path?.trim() || fallback(orgId);
+    return { wsPath };
   }
   if (orgType === 'department') {
     const ws = await vmGet<VmWorkspace>(`/api/workspaces/${orgId}`, cookie);
-    if (!ws?.path) return null;
-    return { wsPath: ws.path, workspaceId: ws.id };
+    if (!ws) return null;
+    const wsPath = ws.path?.trim() || fallback(orgId);
+    return { wsPath, workspaceId: ws.id };
   }
   // team
   const team = await vmGet<VmTeam>(`/api/teams/${orgId}`, cookie);
   if (!team) return null;
   const ws = await vmGet<VmWorkspace>(`/api/workspaces/${team.workspace_id}`, cookie);
-  if (!ws?.path) return null;
-  return { wsPath: ws.path, workspaceId: ws.id };
+  const wsPath = ws?.path?.trim() || fallback(orgId);
+  return { wsPath, workspaceId: ws?.id ?? team.workspace_id };
 }
 
 // ── POST /api/harness — 설계 요청 ────────────────────────────────────
@@ -122,7 +131,7 @@ export async function POST(req: NextRequest) {
 
   const cookie = getVmSessionCookie(req);
   const loc = await getWsPath(org_id, org_type, cookie);
-  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  if (!loc) return Response.json({ ok: false, error: `조직을 찾을 수 없습니다 (id: ${org_id})` }, { status: 404 });
   const { wsPath } = loc;
 
   // ── 부문/실: 리더 역할 정의 ──
@@ -235,7 +244,7 @@ export async function PATCH(req: NextRequest) {
 
   const cookie = getVmSessionCookie(req);
   const loc = await getWsPath(org_id, org_type, cookie);
-  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  if (!loc) return Response.json({ ok: false, error: `조직을 찾을 수 없습니다 (id: ${org_id})` }, { status: 404 });
   const { wsPath, workspaceId } = loc;
 
   // ── 부문/실: 리더 1명만 생성/업데이트 ──

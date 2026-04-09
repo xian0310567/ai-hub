@@ -1,6 +1,7 @@
 node_modules/
 .next/
 .data/
+dist/
 *.env
 *.env.local
 auth.env

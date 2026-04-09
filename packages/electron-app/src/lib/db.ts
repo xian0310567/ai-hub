@@ -59,20 +59,46 @@ db.exec(`
 
   -- 미션 잡 큐 (에이전트별 순차 실행)
   CREATE TABLE IF NOT EXISTS mission_jobs (
+    id              TEXT PRIMARY KEY,
+    mission_id      TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    agent_id        TEXT NOT NULL,
+    agent_name      TEXT NOT NULL,
+    org_name        TEXT NOT NULL DEFAULT '',
+    subtask         TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'queued',
+    gate_type       TEXT NOT NULL DEFAULT 'auto',
+    gate_status     TEXT NOT NULL DEFAULT 'approved',
+    quality_scores  TEXT,
+    result          TEXT NOT NULL DEFAULT '',
+    error           TEXT NOT NULL DEFAULT '',
+    queued_at       INTEGER NOT NULL DEFAULT (unixepoch()),
+    started_at      INTEGER,
+    finished_at     INTEGER
+  );
+
+  -- 미션 템플릿 (재사용 가능한 워크플로)
+  CREATE TABLE IF NOT EXISTS mission_templates (
     id          TEXT PRIMARY KEY,
-    mission_id  TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-    agent_id    TEXT NOT NULL,
-    agent_name  TEXT NOT NULL,
-    org_name    TEXT NOT NULL DEFAULT '',
-    subtask     TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'queued',
-    gate_type   TEXT NOT NULL DEFAULT 'auto',
-    gate_status TEXT NOT NULL DEFAULT 'approved',
-    result      TEXT NOT NULL DEFAULT '',
-    error       TEXT NOT NULL DEFAULT '',
-    queued_at   INTEGER NOT NULL DEFAULT (unixepoch()),
-    started_at  INTEGER,
-    finished_at INTEGER
+    user_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    task        TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '[]',
+    is_builtin  INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  -- MCP 서버 설정 (Claude CLI --mcp-config 연동)
+  CREATE TABLE IF NOT EXISTS mcp_server_configs (
+    id        TEXT PRIMARY KEY,
+    user_id   TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    label     TEXT NOT NULL DEFAULT '',
+    command   TEXT NOT NULL,
+    args      TEXT NOT NULL DEFAULT '[]',
+    env_json  TEXT NOT NULL DEFAULT '{}',
+    enabled   INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   -- 반복 미션 스케줄
@@ -96,6 +122,7 @@ try { db.exec("ALTER TABLE missions ADD COLUMN parent_mission_id TEXT REFERENCES
 try { db.exec("ALTER TABLE missions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAULT 'auto'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
+try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 
 // 서버 재시작 시 stuck 잡 정리
 db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
@@ -158,8 +185,27 @@ export const MissionJobs = {
   finish:          (id: string, result: string) => db.prepare("UPDATE mission_jobs SET status='done', result=?, finished_at=unixepoch() WHERE id=?").run(result, id),
   fail:            (id: string, error: string) => db.prepare("UPDATE mission_jobs SET status='failed', error=?, finished_at=unixepoch() WHERE id=?").run(error, id),
   get:             (id: string) => db.prepare('SELECT * FROM mission_jobs WHERE id=?').get(id) as MissionJob | undefined,
-  setPendingGate:  (id: string) => db.prepare("UPDATE mission_jobs SET status='gate_pending', gate_status='pending' WHERE id=?").run(id),
-  approve:         (id: string) => db.prepare("UPDATE mission_jobs SET gate_status='approved' WHERE id=?").run(id),
+  setPendingGate:    (id: string) => db.prepare("UPDATE mission_jobs SET status='gate_pending', gate_status='pending' WHERE id=?").run(id),
+  approve:           (id: string) => db.prepare("UPDATE mission_jobs SET gate_status='approved' WHERE id=?").run(id),
+  setQualityScores:  (id: string, scores: string) => db.prepare("UPDATE mission_jobs SET quality_scores=? WHERE id=?").run(scores, id),
+};
+
+export const MissionTemplates = {
+  list:   (userId: string) => db.prepare('SELECT * FROM mission_templates WHERE user_id=? OR is_builtin=1 ORDER BY is_builtin DESC, created_at DESC').all(userId) as MissionTemplate[],
+  get:    (id: string) => db.prepare('SELECT * FROM mission_templates WHERE id=?').get(id) as MissionTemplate | undefined,
+  create: (t: { id: string; user_id: string; name: string; description: string; task: string; tags?: string; is_builtin?: number }) =>
+    db.prepare('INSERT INTO mission_templates(id,user_id,name,description,task,tags,is_builtin) VALUES(?,?,?,?,?,?,?)').run(t.id, t.user_id, t.name, t.description, t.task, t.tags ?? '[]', t.is_builtin ?? 0),
+  delete: (id: string) => db.prepare('DELETE FROM mission_templates WHERE id=?').run(id),
+};
+
+export const McpServerConfigs = {
+  list:        (userId: string) => db.prepare('SELECT * FROM mcp_server_configs WHERE user_id=? ORDER BY created_at').all(userId) as McpServerConfig[],
+  listEnabled: (userId: string) => db.prepare("SELECT * FROM mcp_server_configs WHERE user_id=? AND enabled=1 ORDER BY created_at").all(userId) as McpServerConfig[],
+  get:         (id: string) => db.prepare('SELECT * FROM mcp_server_configs WHERE id=?').get(id) as McpServerConfig | undefined,
+  create:      (c: { id: string; user_id: string; name: string; label: string; command: string; args?: string; env_json?: string }) =>
+    db.prepare('INSERT INTO mcp_server_configs(id,user_id,name,label,command,args,env_json) VALUES(?,?,?,?,?,?,?)').run(c.id, c.user_id, c.name, c.label, c.command, c.args ?? '[]', c.env_json ?? '{}'),
+  setEnabled:  (id: string, enabled: boolean) => db.prepare('UPDATE mcp_server_configs SET enabled=? WHERE id=?').run(enabled ? 1 : 0, id),
+  delete:      (id: string) => db.prepare('DELETE FROM mcp_server_configs WHERE id=?').run(id),
 };
 
 export const MissionSchedules = {
@@ -196,8 +242,17 @@ export interface MissionJob {
   id: string; mission_id: string; agent_id: string; agent_name: string;
   org_name: string; subtask: string; status: string;
   gate_type: string; gate_status: string;
+  quality_scores?: string;
   result: string; error: string;
   queued_at?: number; started_at?: number; finished_at?: number;
+}
+export interface MissionTemplate {
+  id: string; user_id: string; name: string; description: string;
+  task: string; tags: string; is_builtin: number; created_at?: number;
+}
+export interface McpServerConfig {
+  id: string; user_id: string; name: string; label: string;
+  command: string; args: string; env_json: string; enabled: number; created_at?: number;
 }
 export interface MissionSchedule {
   id: string; user_id: string; name: string; cron_expr: string;

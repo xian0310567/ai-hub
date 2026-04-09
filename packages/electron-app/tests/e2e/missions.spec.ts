@@ -74,6 +74,39 @@ test.describe('미션 (/missions)', () => {
     expect(res.status()).toBe(404);
   });
 
+  test('API: GET /api/templates — 200 응답', async ({ page }) => {
+    const res = await page.request.get('/api/templates');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('ok', true);
+    expect(body).toHaveProperty('templates');
+    expect(Array.isArray(body.templates)).toBe(true);
+  });
+
+  test('API: GET /api/mcp-configs — 200 응답', async ({ page }) => {
+    const res = await page.request.get('/api/mcp-configs');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty('ok', true);
+    expect(body).toHaveProperty('configs');
+    expect(Array.isArray(body.configs)).toBe(true);
+  });
+
+  test('API: GET /api/missions/nonexistent-id/jobs — 404', async ({ page }) => {
+    const res = await page.request.get('/api/missions/nonexistent-id/jobs');
+    expect(res.status()).toBe(404);
+  });
+
+  test('API: POST /api/templates — 필수 필드 없으면 400', async ({ page }) => {
+    const res = await page.request.post('/api/templates', { data: { description: 'test' } });
+    expect(res.status()).toBe(400);
+  });
+
+  test('API: POST /api/mcp-configs — 필수 필드 없으면 400', async ({ page }) => {
+    const res = await page.request.post('/api/mcp-configs', { data: { label: 'test' } });
+    expect(res.status()).toBe(400);
+  });
+
   test('미션 목록에 실패 미션 재개 버튼 존재', async ({ page }) => {
     // 실패 미션이 있을 때만 테스트
     const resumeBtn = page.getByRole('button', { name: /재개/ });

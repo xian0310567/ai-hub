@@ -457,6 +457,108 @@ function BackupTab() {
   );
 }
 
+// ── MCP 서버 탭 ───────────────────────────────────────────────────
+interface McpConfig { id: string; name: string; label: string; command: string; args: string; env_json: string; enabled: number; }
+
+function McpTab() {
+  const [configs, setConfigs] = useState<McpConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: '', label: '', command: '', args: '', env: '' });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(() => {
+    fetch('/api/mcp-configs').then(r => r.json()).then(d => { setConfigs(d.configs ?? []); setLoading(false); });
+  }, []);
+  useEffect(load, [load]);
+
+  const toggle = async (cfg: McpConfig) => {
+    await fetch(`/api/mcp-configs/${cfg.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !cfg.enabled }) });
+    load();
+  };
+  const del = async (id: string) => {
+    if (!confirm('삭제하시겠습니까?')) return;
+    await fetch(`/api/mcp-configs/${id}`, { method: 'DELETE' });
+    load();
+  };
+  const add = async () => {
+    if (!form.name || !form.command) { setErr('이름과 command는 필수입니다'); return; }
+    setSaving(true); setErr('');
+    try {
+      let args: string[] = [];
+      if (form.args.trim()) args = form.args.split(/\s+/);
+      let env: Record<string, string> = {};
+      if (form.env.trim()) {
+        for (const line of form.env.split('\n')) {
+          const eq = line.indexOf('=');
+          if (eq > 0) env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+        }
+      }
+      const res = await fetch('/api/mcp-configs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: form.name, label: form.label || form.name, command: form.command, args, env }) });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      setForm({ name: '', label: '', command: '', args: '', env: '' });
+      load();
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>로딩 중…</div>;
+
+  return (
+    <div>
+      <div style={S.sec}>🔌 MCP 서버 설정</div>
+      <div style={S.hint}>Claude CLI에 연결할 MCP(Model Context Protocol) 서버를 등록합니다. 미션 실행 시 자동으로 --mcp-config로 전달됩니다.</div>
+
+      {/* 목록 */}
+      {configs.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 20 }}>등록된 MCP 서버가 없습니다.</div>
+      ) : (
+        <div style={{ ...S.card, marginBottom: 24 }}>
+          <div style={{ ...S.tblHdr, gridTemplateColumns: '1fr 1.5fr 2fr 80px 90px' }}>
+            <span>이름</span><span>레이블</span><span>Command</span><span>상태</span><span></span>
+          </div>
+          {configs.map(c => (
+            <div key={c.id} style={{ ...S.tblRow, gridTemplateColumns: '1fr 1.5fr 2fr 80px 90px' }}>
+              <span style={{ fontWeight: 600 }}>{c.name}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>{c.label}</span>
+              <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>{c.command} {JSON.parse(c.args || '[]').join(' ')}</span>
+              <span>
+                <button onClick={() => toggle(c)} style={{ ...S.btnSm, color: c.enabled ? 'var(--success, #4caf50)' : 'var(--text-muted)' }}>
+                  {c.enabled ? '✓ 활성' : '비활성'}
+                </button>
+              </span>
+              <span>
+                <button onClick={() => del(c.id)} style={S.btnDel}>삭제</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 추가 폼 */}
+      <div style={{ ...S.card, padding: 18 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>새 MCP 서버 추가</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <input style={S.input} placeholder="서버 이름 (예: filesystem)" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          <input style={S.input} placeholder="레이블 (선택)" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <input style={{ ...S.input, width: '100%' }} placeholder="command (예: npx)" value={form.command} onChange={e => setForm(f => ({ ...f, command: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <input style={{ ...S.input, width: '100%' }} placeholder="args (공백 구분, 예: @modelcontextprotocol/server-filesystem /tmp)" value={form.args} onChange={e => setForm(f => ({ ...f, args: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <textarea style={{ ...S.input, width: '100%', minHeight: 60 }} placeholder={"환경변수 (KEY=VALUE, 줄바꿈 구분)\nAPI_KEY=your-key"} value={form.env} onChange={e => setForm(f => ({ ...f, env: e.target.value }))} />
+        </div>
+        {err && <div style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 10 }}>{err}</div>}
+        <button style={S.btn} onClick={add} disabled={saving}>{saving ? '저장 중…' : '추가'}</button>
+      </div>
+    </div>
+  );
+}
+
 // ── 메인 페이지 ───────────────────────────────────────────────────
 const TABS = [
   { id: 'hosts',      label: '💻 호스트 상태' },
@@ -464,6 +566,7 @@ const TABS = [
   { id: 'team-members', label: '👥 팀 멤버십' },
   { id: 'org-members',  label: '🏢 조직 멤버' },
   { id: 'backup',       label: '💾 백업' },
+  { id: 'mcp',          label: '🔌 MCP 서버' },
 ];
 
 function SettingsContent() {
@@ -526,6 +629,7 @@ function SettingsContent() {
           {tab === 'team-members' && <TeamMembersTab userRole={userRole} orgId={orgId} />}
           {tab === 'org-members'  && <OrgMembersTab userRole={userRole} orgId={orgId} />}
           {tab === 'backup'       && <BackupTab />}
+          {tab === 'mcp'          && <McpTab />}
         </div>
       </div>
     </div>

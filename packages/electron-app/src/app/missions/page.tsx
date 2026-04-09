@@ -32,6 +32,30 @@ interface Mission {
   created_at?: number;
 }
 
+interface Template {
+  id: string;
+  name: string;
+  description: string;
+  task: string;
+  tags: string;
+  is_builtin: number;
+}
+
+interface QualityScores {
+  quality: number;
+  completeness: number;
+  accuracy: number;
+  timeliness: number;
+  collaboration: number;
+  average: number;
+}
+
+interface MissionJob {
+  id: string;
+  agent_name: string;
+  quality_scores?: string;
+}
+
 type View = 'list' | 'create' | 'routing' | 'running' | 'result';
 
 export default function MissionsPage() {
@@ -48,6 +72,9 @@ export default function MissionsPage() {
   const [attachedImages, setAttachedImages] = useState<Array<{ id: string; dataUrl: string; name: string; size: number }>>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [expandedSubtasks, setExpandedSubtasks] = useState<Set<number>>(new Set());
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [missionJobs, setMissionJobs] = useState<MissionJob[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -63,6 +90,11 @@ export default function MissionsPage() {
   }, [router]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  const loadTemplates = useCallback(() => {
+    fetch('/api/templates').then(r => r.json()).then(d => { if (d.ok) setTemplates(d.templates); });
+  }, []);
+  useEffect(() => { loadTemplates(); }, [loadTemplates]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -239,6 +271,13 @@ export default function MissionsPage() {
               setFinalDoc(ev.final_doc);
               setView('result');
               reload();
+              // 잡 품질 점수 로드 (비동기 채점이 완료됐을 수 있음)
+              if (missionId) {
+                setTimeout(async () => {
+                  const jRes = await fetch(`/api/missions/${missionId}/jobs`).catch(() => null);
+                  if (jRes?.ok) { const jData = await jRes.json(); setMissionJobs(jData.jobs ?? []); }
+                }, 2000);
+              }
             } else if (ev.type === 'error') {
               setErr(ev.error);
             }
@@ -286,12 +325,17 @@ export default function MissionsPage() {
   // 과거 미션 결과 보기
   const viewMission = async (m: Mission) => {
     try {
-      const r = await fetch(`/api/missions/${m.id}`);
-      const d = await r.json();
+      const [missionRes, jobsRes] = await Promise.all([
+        fetch(`/api/missions/${m.id}`),
+        fetch(`/api/missions/${m.id}/jobs`),
+      ]);
+      const d = await missionRes.json();
+      const jobsData = await jobsRes.json().catch(() => ({ ok: false }));
       if (d.ok) {
         setCurrent(d.mission);
         setSteps(d.mission.steps || []);
         setFinalDoc(d.mission.final_doc || '');
+        setMissionJobs(jobsData.ok ? jobsData.jobs : []);
         setView('result');
       }
     } catch {}
@@ -441,9 +485,51 @@ export default function MissionsPage() {
         {/* ── 생성 뷰 ── */}
         {view === 'create' && (
           <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 24, background: 'var(--bg-panel)' }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-              🎯 새 미션 생성
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>🎯 새 미션 생성</span>
+              {templates.length > 0 && (
+                <button onClick={() => setShowTemplates(v => !v)} style={{
+                  marginLeft: 'auto', fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 4,
+                  background: showTemplates ? 'var(--accent)' : 'none', color: showTemplates ? '#fff' : 'var(--accent)',
+                  border: '1px solid var(--accent)', cursor: 'pointer', fontFamily: 'inherit',
+                }}>
+                  📋 템플릿 {showTemplates ? '▲' : '▼'}
+                </button>
+              )}
             </div>
+
+            {/* 템플릿 갤러리 */}
+            {showTemplates && templates.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10 }}>
+                  템플릿 선택
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, maxHeight: 260, overflowY: 'auto', paddingBottom: 4 }}>
+                  {templates.map(t => (
+                    <div key={t.id} onClick={() => { setTask(t.task); setShowTemplates(false); }}
+                      style={{
+                        border: '1px solid var(--border)', borderRadius: 6, padding: '12px 14px',
+                        cursor: 'pointer', background: 'var(--bg-elevated)', transition: 'border-color .1s',
+                        borderLeft: t.is_builtin ? '3px solid var(--accent)' : '3px solid var(--border)',
+                      }}
+                      onMouseOver={e => { (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--accent)'; }}
+                      onMouseOut={e => { (e.currentTarget as HTMLDivElement).style.borderColor = t.is_builtin ? 'var(--accent)' : 'var(--border)'; }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                        {t.is_builtin ? '⭐ ' : ''}{t.name}
+                      </div>
+                      {t.description && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{t.description}</div>
+                      )}
+                      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 6, lineHeight: 1.4, fontStyle: 'italic' }}>
+                        {t.task.slice(0, 80)}{t.task.length > 80 ? '…' : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: 16 }}>
               어떤 업무를 진행하고 싶은지 자연어로 설명하세요.<br />
               AI가 조직도를 분석하여 적합한 팀에 자동 배정합니다.
@@ -805,11 +891,11 @@ export default function MissionsPage() {
         {/* ── 결과 뷰 ── */}
         {view === 'result' && (
           <div>
-            {/* 실행 이력 */}
+            {/* 실행 이력 + 품질 점수 */}
             <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 18, background: 'var(--bg-panel)', marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>📊 실행 이력</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>{current?.task}</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: missionJobs.some(j => j.quality_scores) ? 16 : 0 }}>
                 {steps.map((s, i) => (
                   <div key={i} style={{
                     display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px',
@@ -822,6 +908,49 @@ export default function MissionsPage() {
                   </div>
                 ))}
               </div>
+              {/* 품질 점수 위젯 */}
+              {missionJobs.some(j => j.quality_scores) && (
+                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10 }}>
+                    품질 점수
+                  </div>
+                  {missionJobs.filter(j => j.quality_scores).map(job => {
+                    const scores: QualityScores = JSON.parse(job.quality_scores!);
+                    const dims: { key: keyof QualityScores; label: string; color: string }[] = [
+                      { key: 'quality',       label: '품질',   color: '#8b5cf6' },
+                      { key: 'completeness',  label: '완성도', color: '#3b82f6' },
+                      { key: 'accuracy',      label: '정확도', color: '#0891b2' },
+                      { key: 'timeliness',    label: '신속성', color: '#059669' },
+                      { key: 'collaboration', label: '협업',   color: '#d97706' },
+                    ];
+                    const avgColor = scores.average >= 80 ? 'var(--success)' : scores.average >= 65 ? '#f59e0b' : 'var(--danger)';
+                    return (
+                      <div key={job.id} style={{ marginBottom: 14 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>{job.agent_name}</span>
+                          <span style={{
+                            fontSize: 13, fontWeight: 800, color: avgColor,
+                            background: avgColor + '18', padding: '2px 10px', borderRadius: 10, border: `1px solid ${avgColor}44`,
+                          }}>{scores.average}점</span>
+                        </div>
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          {dims.map(d => (
+                            <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', width: 40, textAlign: 'right' }}>{d.label}</span>
+                              <div style={{ flex: 1, height: 6, background: 'var(--bg-canvas)', borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ width: `${scores[d.key]}%`, height: '100%', background: d.color, borderRadius: 3, transition: 'width .6s ease' }} />
+                              </div>
+                              <span style={{ fontSize: 10, color: 'var(--text-secondary)', width: 28, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                {scores[d.key]}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* 최종 문서 */}

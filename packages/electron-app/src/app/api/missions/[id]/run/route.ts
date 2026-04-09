@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
-import { Missions, MissionJobs } from '@/lib/db';
+import { Missions, MissionJobs, McpServerConfigs } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
 import { readAllPersonalSecrets } from '@/lib/personal-vault';
+import { scoreJob } from '@/lib/quality-scorer';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -58,6 +59,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   // Vault 시크릿을 환경변수로 수집 (personal + org/team)
   const vaultEnv = await collectVaultEnv(user.id, cookie);
+
+  // MCP 서버 설정 파일 생성
+  const mcpConfigPath = await buildMcpConfigFile(user.id, id);
 
   // 잡 + vm-server 태스크 생성
   const jobIds: string[] = [];
@@ -124,7 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try {
           // vm-server에서 에이전트 정보 가져오기
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
-          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie);
+          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie, mcpConfigPath);
 
           // 증거 없는 완료 불인정
           if (!output || output.trim().length < 50) {
@@ -132,6 +136,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           }
 
           MissionJobs.finish(jobId, output);
+          scoreJob(jobId, user.id); // fire-and-forget 품질 채점
           if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'completed', result: output }, cookie);
           steps[idx] = { ...steps[idx], status: 'done', output };
           Missions.update(id, { steps: JSON.stringify(steps) });
@@ -156,6 +161,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       } catch (e: unknown) {
         Missions.update(id, { status: 'failed', steps: JSON.stringify(steps) });
         send({ type: 'error', error: `통합 문서 생성 실패: ${e instanceof Error ? e.message : String(e)}` });
+      } finally {
+        // MCP 임시 설정 파일 정리
+        if (mcpConfigPath) { try { fs.unlinkSync(mcpConfigPath); } catch {} }
       }
       controller.close();
     },
@@ -270,7 +278,7 @@ async function callClaude(
 }
 
 // ── 에이전트 작업 실행 ─────────────────────────────────────────────────
-async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}, cookie = ''): Promise<string> {
+async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}, cookie = '', mcpConfigPath: string | null = null): Promise<string> {
   let wsPath = process.cwd();
   if (agent?.workspace_id) {
     try {
@@ -299,6 +307,7 @@ async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, mi
   }
 
   const modelArgs = agent?.model ? ['--model', agent.model] : [];
+  const mcpArgs = mcpConfigPath ? ['--mcp-config', mcpConfigPath] : [];
   const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션
 전체 미션: ${missionTask}${imagePaths.length ? `\n\n**참고: ${imagePaths.length}개 이미지 첨부됨**` : ''}
 
@@ -311,7 +320,26 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 
 지금 바로 시작하세요:`;
 
-  return callClaude(prompt, wsPath, modelArgs, true, imagePaths, extraEnv);
+  return callClaude(prompt, wsPath, [...modelArgs, ...mcpArgs], true, imagePaths, extraEnv);
+}
+
+// ── MCP 설정 파일 생성 ─────────────────────────────────────────────────
+async function buildMcpConfigFile(userId: string, missionId: string): Promise<string | null> {
+  try {
+    const configs = McpServerConfigs.listEnabled(userId);
+    if (!configs.length) return null;
+    const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+    for (const c of configs) {
+      const args = JSON.parse(c.args || '[]');
+      const env  = JSON.parse(c.env_json || '{}');
+      mcpServers[c.name] = { command: c.command, args, ...(Object.keys(env).length ? { env } : {}) };
+    }
+    const tmpPath = path.join('/tmp', `mcp-config-${missionId}.json`);
+    fs.writeFileSync(tmpPath, JSON.stringify({ mcpServers }, null, 2));
+    return tmpPath;
+  } catch {
+    return null;
+  }
 }
 
 // ── 최종 통합 문서 ─────────────────────────────────────────────────────

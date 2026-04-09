@@ -55,8 +55,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const cookie = getVmSessionCookie(req);
 
-  // Personal Vault 시크릿을 환경변수로 수집
-  const vaultEnv = await collectPersonalVaultEnv(user.id, cookie);
+  // Vault 시크릿을 환경변수로 수집 (personal + org/team)
+  const vaultEnv = await collectVaultEnv(user.id, cookie);
 
   // 잡 + vm-server 태스크 생성
   const jobIds: string[] = [];
@@ -168,24 +168,39 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
-// ── Personal Vault 환경변수 수집 ──────────────────────────────────────
-async function collectPersonalVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
+// ── Vault 환경변수 수집 (personal_meta + org/team) ───────────────────
+async function collectVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
   try {
     const res = await fetch(`${VM_URL}/api/vaults`, { headers: { Cookie: cookie } });
     if (!res.ok) return {};
     const vaults = await res.json() as { id: string; scope: string }[];
-    const personalVaults = vaults.filter(v => v.scope === 'personal_meta');
-    if (!personalVaults.length) return {};
+    if (!vaults.length) return {};
 
     const envVars: Record<string, string> = {};
-    await Promise.all(personalVaults.map(async vault => {
-      const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
-      if (!secretsRes.ok) return;
-      const secrets = await secretsRes.json() as { key_name: string }[];
-      const keyNames = secrets.map(s => s.key_name);
-      if (!keyNames.length) return;
-      const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
-      Object.assign(envVars, values);
+    await Promise.all(vaults.map(async vault => {
+      try {
+        const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
+        if (!secretsRes.ok) return;
+        const secrets = await secretsRes.json() as { key_name: string }[];
+        const keyNames = secrets.map(s => s.key_name);
+        if (!keyNames.length) return;
+
+        if (vault.scope === 'personal_meta') {
+          // 실제 값은 로컬 키체인에서 조회
+          const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
+          Object.assign(envVars, values);
+        } else {
+          // org/team vault: lease 엔드포인트로 서버에서 복호화 값 수신
+          const leaseRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/lease`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Cookie: cookie },
+            body: JSON.stringify({ key_names: keyNames, task_id: null }),
+          });
+          if (!leaseRes.ok) return;
+          const { secrets: leased } = await leaseRes.json() as { secrets: Record<string, string> };
+          Object.assign(envVars, leased);
+        }
+      } catch { /* vault 개별 실패는 무시 */ }
     }));
 
     return envVars;

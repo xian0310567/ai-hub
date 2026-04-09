@@ -209,6 +209,7 @@ export async function POST(req: NextRequest) {
                 cron_expr: parsed.cron_expr,
                 task,
                 routing: JSON.stringify(routing),
+                session_cookie: cookie,
                 next_run_at: nextTs,
               });
             } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }

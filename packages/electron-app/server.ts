@@ -86,7 +86,7 @@ function startMissionScheduler() {
 
         // 백그라운드로 미션 실행 (동적 import로 next.js 컨텍스트 없이 실행)
         import('./src/lib/mission-runner.js').then(({ runMissionBackground }) => {
-          runMissionBackground(missionId).catch(err =>
+          runMissionBackground(missionId, sched.session_cookie || '').catch(err =>
             console.error(`[mission-scheduler] 미션 실행 실패 (${missionId}):`, err.message)
           );
         }).catch(err => console.error('[mission-scheduler] runner import 실패:', err.message));

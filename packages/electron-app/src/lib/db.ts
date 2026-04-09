@@ -73,16 +73,17 @@ db.exec(`
 
   -- 반복 미션 스케줄
   CREATE TABLE IF NOT EXISTS mission_schedules (
-    id          TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    cron_expr   TEXT NOT NULL,
-    task        TEXT NOT NULL,
-    routing     TEXT NOT NULL DEFAULT '[]',
-    enabled     INTEGER NOT NULL DEFAULT 1,
-    last_run_at INTEGER,
-    next_run_at INTEGER,
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+    id             TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    cron_expr      TEXT NOT NULL,
+    task           TEXT NOT NULL,
+    routing        TEXT NOT NULL DEFAULT '[]',
+    session_cookie TEXT NOT NULL DEFAULT '',
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    last_run_at    INTEGER,
+    next_run_at    INTEGER,
+    created_at     INTEGER NOT NULL DEFAULT (unixepoch())
   );
 `);
 
@@ -150,8 +151,8 @@ export const MissionSchedules = {
   list:    (userId: string) => db.prepare('SELECT * FROM mission_schedules WHERE user_id=? ORDER BY created_at DESC').all(userId) as MissionSchedule[],
   listDue: () => db.prepare('SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= unixepoch()').all() as MissionSchedule[],
   get:     (id: string) => db.prepare('SELECT * FROM mission_schedules WHERE id=?').get(id) as MissionSchedule | undefined,
-  create:  (s: { id: string; user_id: string; name: string; cron_expr: string; task: string; routing: string; next_run_at: number }) =>
-    db.prepare('INSERT INTO mission_schedules(id,user_id,name,cron_expr,task,routing,next_run_at) VALUES(?,?,?,?,?,?,?)').run(s.id, s.user_id, s.name, s.cron_expr, s.task, s.routing, s.next_run_at),
+  create:  (s: { id: string; user_id: string; name: string; cron_expr: string; task: string; routing: string; session_cookie?: string; next_run_at: number }) =>
+    db.prepare('INSERT INTO mission_schedules(id,user_id,name,cron_expr,task,routing,session_cookie,next_run_at) VALUES(?,?,?,?,?,?,?,?)').run(s.id, s.user_id, s.name, s.cron_expr, s.task, s.routing, s.session_cookie ?? '', s.next_run_at),
   update:  (id: string, fields: Partial<MissionSchedule>) => {
     const sets = Object.keys(fields).map(k => `${k}=?`).join(',');
     db.prepare(`UPDATE mission_schedules SET ${sets} WHERE id=?`).run(...Object.values(fields), id);
@@ -183,6 +184,6 @@ export interface MissionJob {
 }
 export interface MissionSchedule {
   id: string; user_id: string; name: string; cron_expr: string;
-  task: string; routing: string; enabled: number;
+  task: string; routing: string; session_cookie: string; enabled: number;
   last_run_at?: number; next_run_at?: number; created_at?: number;
 }

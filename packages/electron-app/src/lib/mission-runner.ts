@@ -3,6 +3,7 @@
  * SSE 없이 미션을 실행하고 결과를 DB에 저장
  */
 import { Missions, MissionJobs } from './db.js';
+import { readAllPersonalSecrets } from './personal-vault.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -17,11 +18,52 @@ interface RoutingEntry {
   agent_id: string; agent_name: string; subtask: string;
 }
 
-async function vmGet(endpoint: string) {
+async function vmGet(endpoint: string, cookie = '') {
   try {
-    const res = await fetch(`${VM_URL}${endpoint}`);
+    const headers: Record<string, string> = cookie ? { Cookie: cookie } : {};
+    const res = await fetch(`${VM_URL}${endpoint}`, { headers });
     return res.ok ? res.json() : null;
   } catch { return null; }
+}
+
+// ── Vault 환경변수 수집 (personal_meta + org/team) ───────────────────
+async function collectVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
+  if (!cookie) return {};
+  try {
+    const res = await fetch(`${VM_URL}/api/vaults`, { headers: { Cookie: cookie } });
+    if (!res.ok) return {};
+    const vaults = await res.json() as { id: string; scope: string }[];
+    if (!vaults.length) return {};
+
+    const envVars: Record<string, string> = {};
+    await Promise.all(vaults.map(async vault => {
+      try {
+        const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
+        if (!secretsRes.ok) return;
+        const secrets = await secretsRes.json() as { key_name: string }[];
+        const keyNames = secrets.map((s: { key_name: string }) => s.key_name);
+        if (!keyNames.length) return;
+
+        if (vault.scope === 'personal_meta') {
+          const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
+          Object.assign(envVars, values);
+        } else {
+          const leaseRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/lease`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Cookie: cookie },
+            body: JSON.stringify({ key_names: keyNames, task_id: null }),
+          });
+          if (!leaseRes.ok) return;
+          const { secrets: leased } = await leaseRes.json() as { secrets: Record<string, string> };
+          Object.assign(envVars, leased);
+        }
+      } catch { /* vault 개별 실패는 무시 */ }
+    }));
+
+    return envVars;
+  } catch {
+    return {};
+  }
 }
 
 async function callClaude(
@@ -30,6 +72,7 @@ async function callClaude(
   modelArgs: string[] = [],
   allowTools = false,
   imagePaths: string[] = [],
+  extraEnv: Record<string, string> = {},
 ): Promise<string> {
   const toolArgs = allowTools ? ['--allowedTools', 'Edit,Write,Read,Bash', '--dangerously-skip-permissions'] : [];
   let lastErr: Error | null = null;
@@ -37,7 +80,7 @@ async function callClaude(
     try {
       const { stdout } = await execFileAsync('claude', ['-p', prompt, ...toolArgs, ...modelArgs, ...imagePaths], {
         cwd, encoding: 'utf8', timeout: 300_000,
-        env: { ...process.env },
+        env: { ...process.env, ...extraEnv },
         maxBuffer: 10 * 1024 * 1024,
       });
       return stdout.trim();
@@ -67,10 +110,10 @@ async function waitForTurn(agentId: string, jobId: string): Promise<void> {
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
-async function getWsPath(agent: any): Promise<string> {
+async function getWsPath(agent: any, cookie = ''): Promise<string> {
   if (!agent?.workspace_id) return process.cwd();
   try {
-    const ws = await vmGet(`/api/workspaces/${agent.workspace_id}`);
+    const ws = await vmGet(`/api/workspaces/${agent.workspace_id}`, cookie);
     const realPath = ws?.path?.trim();
     if (realPath && fs.existsSync(realPath)) return realPath;
   } catch {}
@@ -80,12 +123,17 @@ async function getWsPath(agent: any): Promise<string> {
   return wsPath;
 }
 
-export async function runMissionBackground(missionId: string): Promise<void> {
+export async function runMissionBackground(missionId: string, sessionCookie = ''): Promise<void> {
   const mission = Missions.get(missionId);
   if (!mission) throw new Error('미션 없음');
 
   const routing: RoutingEntry[] = JSON.parse(mission.routing || '[]');
   if (!routing.length) throw new Error('라우팅 없음');
+
+  // Vault 시크릿 수집
+  const vaultEnv = await collectVaultEnv(mission.user_id, sessionCookie);
+  if (Object.keys(vaultEnv).length > 0)
+    console.log(`[mission-runner] vault 시크릿 ${Object.keys(vaultEnv).length}개 로드됨`);
 
   // 잡 생성
   const jobIds: string[] = [];
@@ -114,8 +162,8 @@ export async function runMissionBackground(missionId: string): Promise<void> {
     Missions.update(missionId, { steps: JSON.stringify(steps) });
 
     try {
-      const agent = await vmGet(`/api/agents/${r.agent_id}`);
-      const wsPath = await getWsPath(agent);
+      const agent = await vmGet(`/api/agents/${r.agent_id}`, sessionCookie);
+      const wsPath = await getWsPath(agent, sessionCookie);
       const modelArgs = agent?.model ? ['--model', agent.model] : [];
       const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션
 전체 미션: ${mission.task}
@@ -129,7 +177,7 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 
 지금 바로 시작하세요:`;
 
-      const output = await callClaude(prompt, wsPath, modelArgs, true);
+      const output = await callClaude(prompt, wsPath, modelArgs, true, [], vaultEnv);
       MissionJobs.finish(jobId, output);
       steps[idx] = { ...steps[idx], status: 'done', output };
       Missions.update(missionId, { steps: JSON.stringify(steps) });

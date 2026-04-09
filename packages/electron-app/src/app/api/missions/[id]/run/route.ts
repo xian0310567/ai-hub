@@ -5,6 +5,8 @@ import { readAllPersonalSecrets } from '@/lib/personal-vault';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 const execFileAsync = promisify(execFile);
 const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
@@ -53,8 +55,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const cookie = getVmSessionCookie(req);
 
-  // Personal Vault 시크릿을 환경변수로 수집
-  const vaultEnv = await collectPersonalVaultEnv(user.id, cookie);
+  // Vault 시크릿을 환경변수로 수집 (personal + org/team)
+  const vaultEnv = await collectVaultEnv(user.id, cookie);
 
   // 잡 + vm-server 태스크 생성
   const jobIds: string[] = [];
@@ -85,7 +87,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const steps: Step[] = routing.map((r, i) => {
         const queue = MissionJobs.queueForAgent(r.agent_id);
         const pos = queue.findIndex(j => j.id === jobIds[i]);
-        return { org_name: r.org_name, agent_name: r.agent_name, status: pos > 0 ? 'waiting' : 'queued', queue_position: pos };
+        return { org_name: r.org_name, agent_name: r.agent_name, status: pos > 0 ? 'waiting' : 'queued', queue_position: Math.max(0, pos) };
       });
       Missions.update(id, { status: 'running', steps: JSON.stringify(steps) });
       send({ type: 'start', steps });
@@ -112,7 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try {
           // vm-server에서 에이전트 정보 가져오기
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
-          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv);
+          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie);
 
           MissionJobs.finish(jobId, output);
           if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'completed', result: output }, cookie);
@@ -166,24 +168,39 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
-// ── Personal Vault 환경변수 수집 ──────────────────────────────────────
-async function collectPersonalVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
+// ── Vault 환경변수 수집 (personal_meta + org/team) ───────────────────
+async function collectVaultEnv(userId: string, cookie: string): Promise<Record<string, string>> {
   try {
     const res = await fetch(`${VM_URL}/api/vaults`, { headers: { Cookie: cookie } });
     if (!res.ok) return {};
     const vaults = await res.json() as { id: string; scope: string }[];
-    const personalVaults = vaults.filter(v => v.scope === 'personal_meta');
-    if (!personalVaults.length) return {};
+    if (!vaults.length) return {};
 
     const envVars: Record<string, string> = {};
-    await Promise.all(personalVaults.map(async vault => {
-      const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
-      if (!secretsRes.ok) return;
-      const secrets = await secretsRes.json() as { key_name: string }[];
-      const keyNames = secrets.map(s => s.key_name);
-      if (!keyNames.length) return;
-      const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
-      Object.assign(envVars, values);
+    await Promise.all(vaults.map(async vault => {
+      try {
+        const secretsRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/secrets`, { headers: { Cookie: cookie } });
+        if (!secretsRes.ok) return;
+        const secrets = await secretsRes.json() as { key_name: string }[];
+        const keyNames = secrets.map(s => s.key_name);
+        if (!keyNames.length) return;
+
+        if (vault.scope === 'personal_meta') {
+          // 실제 값은 로컬 키체인에서 조회
+          const values = await readAllPersonalSecrets(userId, vault.id, keyNames);
+          Object.assign(envVars, values);
+        } else {
+          // org/team vault: lease 엔드포인트로 서버에서 복호화 값 수신
+          const leaseRes = await fetch(`${VM_URL}/api/vaults/${vault.id}/lease`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Cookie: cookie },
+            body: JSON.stringify({ key_names: keyNames, task_id: null }),
+          });
+          if (!leaseRes.ok) return;
+          const { secrets: leased } = await leaseRes.json() as { secrets: Record<string, string> };
+          Object.assign(envVars, leased);
+        }
+      } catch { /* vault 개별 실패는 무시 */ }
     }));
 
     return envVars;
@@ -214,8 +231,11 @@ async function callClaude(
     } catch (e: unknown) {
       lastErr = e instanceof Error ? e : new Error(String(e));
       const err = e as NodeJS.ErrnoException & { killed?: boolean; stdout?: string };
+      // 타임아웃 시 1회 재시도
       if (err.killed || err.code === 'ETIMEDOUT') { await new Promise(r => setTimeout(r, 3000)); continue; }
-      if (err.stdout && (err.stdout as string).trim().length > 50) return (err.stdout as string).trim();
+      // maxBuffer 초과 시에만 부분 출력 반환 (다른 에러는 부분 출력을 신뢰할 수 없음)
+      if (err.code === 'ERR_CHILD_PROCESS_STDOUT_MAX_BUFFER_SIZE' && err.stdout && (err.stdout as string).trim().length > 50)
+        return (err.stdout as string).trim();
       throw e;
     }
   }
@@ -223,14 +243,26 @@ async function callClaude(
 }
 
 // ── 에이전트 작업 실행 ─────────────────────────────────────────────────
-async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}): Promise<string> {
+async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}, cookie = ''): Promise<string> {
   let wsPath = process.cwd();
-  if (agent) {
-    // vm-server에서 workspace path를 가져오기 위해 agent.workspace_id 사용
-    // 로컬 파일 시스템 경로는 electron-app의 DATA_DIR 기반으로 결정
-    const dataDir = process.env.DATA_DIR || require('path').join(process.cwd(), '.data');
-    wsPath = require('path').join(dataDir, 'workspaces', agent.workspace_id || 'default');
-    require('fs').mkdirSync(wsPath, { recursive: true });
+  if (agent?.workspace_id) {
+    try {
+      // vm-server에서 실제 workspace path 조회
+      const ws = await vmGet(`/api/workspaces/${agent.workspace_id}`, cookie);
+      const realPath = ws?.path?.trim();
+      if (realPath && fs.existsSync(realPath)) {
+        wsPath = realPath;
+      } else {
+        // workspace path가 없거나 존재하지 않는 경우 로컬 샌드박스 사용
+        const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+        wsPath = path.join(dataDir, 'workspaces', agent.workspace_id);
+        fs.mkdirSync(wsPath, { recursive: true });
+      }
+    } catch {
+      const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+      wsPath = path.join(dataDir, 'workspaces', agent.workspace_id);
+      fs.mkdirSync(wsPath, { recursive: true });
+    }
   }
 
   const mission = Missions.get(missionId);

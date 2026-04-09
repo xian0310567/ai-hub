@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { Missions, Notifications } from '@/lib/db';
+import { Missions, Notifications, MissionSchedules } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import cronParser from 'cron-parser';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -152,8 +153,9 @@ export async function POST(req: NextRequest) {
   Missions.create({ id, user_id: user.id, task, routing: '[]' });
   Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
 
-  // Claude CLI 실행 디렉토리 결정
-  const cwd = orgData.workspaces[0]?.path || process.cwd();
+  // Claude CLI 실행 디렉토리 결정 (workspace path가 비어있거나 없으면 cwd 사용)
+  const firstWsPath = orgData.workspaces[0]?.path;
+  const cwd = (firstWsPath && firstWsPath.trim() && fs.existsSync(firstWsPath)) ? firstWsPath : process.cwd();
   const hasImages = savedImages.length > 0;
   const promptArgs = ['-p', buildRoutingPrompt(orgChart, task, hasImages)];
   if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
@@ -163,8 +165,23 @@ export async function POST(req: NextRequest) {
       (err, stdout) => {
         if (err) { Missions.update(id, { status: 'routing_failed' }); return; }
         try {
-          const cleaned = stdout.trim().replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-          const parsed = JSON.parse(cleaned);
+          // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
+          let parsed: any;
+          const text = stdout.trim();
+          // 1차 시도: 코드 펜스 제거 후 파싱
+          const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+          try { parsed = JSON.parse(cleaned); } catch {
+            // 2차 시도: 첫 { 부터 마지막 } 까지 추출
+            const start = text.indexOf('{');
+            const end = text.lastIndexOf('}');
+            if (start === -1 || end === -1 || end <= start) throw new Error('JSON 없음');
+            parsed = JSON.parse(text.slice(start, end + 1));
+          }
+
+          const routing = parsed.routing || [];
+          if (!Array.isArray(routing) || routing.length === 0) {
+            Missions.update(id, { status: 'routing_failed' }); return;
+          }
 
           for (const orgName of (parsed.new_org_needed || [])) {
             Notifications.create({ id: randomUUID(), user_id: user.id, type: 'org_needed',
@@ -172,11 +189,31 @@ export async function POST(req: NextRequest) {
           }
 
           Missions.update(id, {
-            routing: JSON.stringify(parsed.routing || []),
+            routing: JSON.stringify(routing),
             status: parsed.needs_clarification ? 'needs_clarification' : 'routed',
             steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
-              clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [] }),
+              clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [],
+              is_recurring: parsed.is_recurring || false, schedule_name: parsed.schedule_name || null,
+              cron_expr: parsed.cron_expr || null }),
           });
+
+          // 반복 미션이면 스케줄 생성
+          if (parsed.is_recurring && parsed.cron_expr && !parsed.needs_clarification) {
+            try {
+              const interval = cronParser.parseExpression(parsed.cron_expr);
+              const nextTs = Math.floor(interval.next().getTime() / 1000);
+              MissionSchedules.create({
+                id: randomUUID(),
+                user_id: user.id,
+                name: parsed.schedule_name || task.slice(0, 60),
+                cron_expr: parsed.cron_expr,
+                task,
+                routing: JSON.stringify(routing),
+                session_cookie: cookie,
+                next_run_at: nextTs,
+              });
+            } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
+          }
         } catch { Missions.update(id, { status: 'routing_failed' }); }
       }
     );
@@ -233,6 +270,15 @@ ${task}
   "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[]}],
   "needs_clarification": false,
   "clarification": null,
-  "new_org_needed": []
-}`;
+  "new_org_needed": [],
+  "is_recurring": false,
+  "cron_expr": null,
+  "schedule_name": null
+}
+
+is_recurring 판단 기준:
+- 사용자 요청에 "매일", "매주", "매월", "정기적으로", "자동으로", "반복", "every", "daily", "weekly" 등의 반복 의도가 있으면 true
+- is_recurring이 true면 cron_expr에 표준 5필드 cron 표현식 작성 (예: "0 9 * * 1-5" = 평일 오전 9시)
+- schedule_name은 이 스케줄의 짧은 이름 (예: "일일 리포트", "주간 요약")
+- 반복 의도가 없으면 세 필드 모두 기본값 유지`;
 }

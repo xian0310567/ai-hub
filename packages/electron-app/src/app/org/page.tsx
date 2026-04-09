@@ -45,31 +45,66 @@ export default function OrgPage() {
   const [harnessLoading, setHarnessLoading] = useState(false);
 
   const reload = useCallback(() => {
-    fetch('/api/divisions').then(r=>r.json()).then(d=>{
-      if (d.ok) {
-        setDivs(d.divisions);
-        setStandalone(d.standalone);
-        // 모든 노드 ID를 수집해서 기본 전체 펼침
-        const ids = new Set<string>();
-        for (const div of d.divisions) {
-          ids.add(div.id);
-          for (const dept of div.departments) {
-            ids.add(dept.id);
-            for (const team of dept.teams) {
-              ids.add(team.id);
-              for (const part of team.parts) ids.add(part.id);
-            }
-          }
+    Promise.all([
+      fetch('/api/divisions').then(r => r.json()).catch(() => []),
+      fetch('/api/workspaces').then(r => r.json()).catch(() => []),
+      fetch('/api/teams').then(r => r.json()).catch(() => []),
+    ]).then(([rawDivs, rawWs, rawTeams]) => {
+      if (!Array.isArray(rawDivs)) {
+        if (rawDivs?.error === 'Unauthorized') { router.replace('/login'); return; }
+        rawDivs = [];
+      }
+
+      // Build teams map keyed by workspace_id
+      const teamsMap: Record<string, Team[]> = {};
+      for (const t of (Array.isArray(rawTeams) ? rawTeams : [])) {
+        const wsId = t.workspace_id;
+        if (!teamsMap[wsId]) teamsMap[wsId] = [];
+        teamsMap[wsId].push({ ...t, lead: null, workers: [], parts: [] });
+      }
+
+      // Build departments (workspaces), keyed by division_id
+      const deptsByDiv: Record<string, Dept[]> = {};
+      const standalone: Dept[] = [];
+      for (const ws of (Array.isArray(rawWs) ? rawWs : [])) {
+        const dept: Dept = { ...ws, lead: null, teams: teamsMap[ws.id] ?? [] };
+        if (ws.division_id) {
+          if (!deptsByDiv[ws.division_id]) deptsByDiv[ws.division_id] = [];
+          deptsByDiv[ws.division_id].push(dept);
+        } else {
+          standalone.push(dept);
         }
-        for (const dept of d.standalone) {
+      }
+
+      // Build divisions with nested departments
+      const divList: Div[] = (rawDivs as any[]).map((x: any) => ({
+        ...x,
+        lead: null,
+        departments: deptsByDiv[x.id] ?? [],
+      }));
+
+      setDivs(divList);
+      setStandalone(standalone);
+
+      const ids = new Set<string>();
+      for (const div of divList) {
+        ids.add(div.id);
+        for (const dept of div.departments) {
           ids.add(dept.id);
           for (const team of dept.teams) {
             ids.add(team.id);
             for (const part of team.parts) ids.add(part.id);
           }
         }
-        setExpanded(ids);
-      } else if (d.error === 'Unauthorized') router.replace('/login');
+      }
+      for (const dept of standalone) {
+        ids.add(dept.id);
+        for (const team of dept.teams) {
+          ids.add(team.id);
+          for (const part of team.parts) ids.add(part.id);
+        }
+      }
+      setExpanded(ids);
     });
   }, [router]);
 
@@ -227,33 +262,25 @@ export default function OrgPage() {
 
   return (
     <div className="org-page" style={{pointerEvents: harnessLoading ? 'none' : 'auto'}}>
-      {/* 헤더 */}
-      <div className="org-page-hdr">
-        <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-muted)',textDecoration:'none',transition:'color .12s'}} onMouseOver={e=>e.currentTarget.style.color='var(--text-primary)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>← 대시보드</a>
-        <span style={{color:'var(--border)'}}>|</span>
-        <span style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>조직 관리</span>
-        <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-          <button
-            onClick={async () => {
-              if (window.confirm('로그아웃하시겠습니까?')) {
-                try {
-                  await fetch('/api/auth/signout', { method: 'POST' });
-                  router.push('/login');
-                } catch (e) {
-                  alert('로그아웃 실패');
-                }
-              }
-            }}
-            style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',border:'1px solid var(--border)',padding:'5px 14px',borderRadius:4,cursor:'pointer',background:'transparent',fontFamily:'inherit',transition:'all .12s'}}
-            onMouseOver={e=>{e.currentTarget.style.color='var(--danger)';e.currentTarget.style.borderColor='var(--danger)';}}
-            onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}
-          >
-            로그아웃
-          </button>
-          <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
-          <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
-        </div>
-      </div>
+      {/* 네비게이션 */}
+      <nav>
+        <div className="nav-title">AI 사업부</div>
+        <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>대시보드</a>
+        <a href="/missions" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>미션</a>
+        <a href="/schedules" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>스케줄</a>
+        <span style={{fontSize:12,fontWeight:500,color:'var(--accent)',padding:'4px 10px',border:'1px solid var(--accent-dim)',borderRadius:4}}>조직 관리</span>
+        <button
+          onClick={async () => {
+            if (window.confirm('로그아웃하시겠습니까?')) {
+              try { await fetch('/api/auth/signout', { method: 'POST' }); router.push('/login'); }
+              catch { alert('로그아웃 실패'); }
+            }
+          }}
+          style={{marginLeft:'auto',fontSize:12,fontWeight:500,color:'var(--text-secondary)',border:'1px solid var(--border)',padding:'4px 10px',borderRadius:4,cursor:'pointer',background:'transparent',fontFamily:'inherit',transition:'all .12s'}}
+          onMouseOver={e=>{e.currentTarget.style.color='var(--danger)';e.currentTarget.style.borderColor='var(--danger)';}}
+          onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}
+        >로그아웃</button>
+      </nav>
 
       <div style={{padding:'24px 32px',maxWidth:900}}>
 
@@ -271,6 +298,12 @@ export default function OrgPage() {
               <div className="org-stat-lbl">{c.label}</div>
             </div>
           ))}
+        </div>
+
+        {/* 조직 관리 액션 버튼 */}
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
+          <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
         </div>
 
         {divs.length===0 && standalone.length===0 && (
@@ -553,7 +586,7 @@ function EditForm({ type, data, onClose, onDone }: {
       }
       const r = await fetch(url, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!d.ok && !d.id) throw new Error(d.error || '오류 발생');
       onDone();
     } catch(e:any) { setErr(e.message || '오류'); }
     setLoading(false);

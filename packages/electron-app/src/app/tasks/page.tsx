@@ -29,7 +29,8 @@ export default function TasksPage() {
       fetch('/api/tasks').then(r=>r.json()),
       fetch('/api/agents').then(r=>r.json()),
     ]);
-    if (tr.ok) setTasks(tr.tasks);
+    if (Array.isArray(tr)) setTasks(tr);
+    else if (tr.ok) setTasks(tr.tasks);
     if (ar.ok) setAgents(ar.agents.filter((a:Agent)=>a.is_lead));
   }, []);
 
@@ -207,7 +208,7 @@ function AddTaskModal({ agents, onClose, onDone }: { agents:Agent[]; onClose:()=
       const r = await fetch('/api/tasks', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ title, description: desc, agent_id: agentId||null, agent_name: agent?.name||null }) });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!d.ok && !d.id) throw new Error(d.error || '생성 실패');
       onDone();
     } catch(e:any) { setErr(e.message||'오류'); }
     setLoading(false);

@@ -14,7 +14,7 @@ const port     = parseInt(process.env.PORT || '3001', 10);
 // running/analyzing 상태로 남아있는 미션·잡·태스크를 failed로 초기화한다.
 try {
   const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
-  const cleanupDb = new Database(path.join(DATA_DIR, 'hub.db'));
+  const cleanupDb = new Database(path.join(DATA_DIR, 'local.db'));
   cleanupDb.exec(`
     UPDATE missions
        SET status = 'failed', updated_at = unixepoch()

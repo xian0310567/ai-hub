@@ -152,8 +152,9 @@ export async function POST(req: NextRequest) {
   Missions.create({ id, user_id: user.id, task, routing: '[]' });
   Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
 
-  // Claude CLI 실행 디렉토리 결정
-  const cwd = orgData.workspaces[0]?.path || process.cwd();
+  // Claude CLI 실행 디렉토리 결정 (workspace path가 비어있거나 없으면 cwd 사용)
+  const firstWsPath = orgData.workspaces[0]?.path;
+  const cwd = (firstWsPath && firstWsPath.trim() && fs.existsSync(firstWsPath)) ? firstWsPath : process.cwd();
   const hasImages = savedImages.length > 0;
   const promptArgs = ['-p', buildRoutingPrompt(orgChart, task, hasImages)];
   if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
@@ -163,8 +164,23 @@ export async function POST(req: NextRequest) {
       (err, stdout) => {
         if (err) { Missions.update(id, { status: 'routing_failed' }); return; }
         try {
-          const cleaned = stdout.trim().replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-          const parsed = JSON.parse(cleaned);
+          // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
+          let parsed: any;
+          const text = stdout.trim();
+          // 1차 시도: 코드 펜스 제거 후 파싱
+          const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+          try { parsed = JSON.parse(cleaned); } catch {
+            // 2차 시도: 첫 { 부터 마지막 } 까지 추출
+            const start = text.indexOf('{');
+            const end = text.lastIndexOf('}');
+            if (start === -1 || end === -1 || end <= start) throw new Error('JSON 없음');
+            parsed = JSON.parse(text.slice(start, end + 1));
+          }
+
+          const routing = parsed.routing || [];
+          if (!Array.isArray(routing) || routing.length === 0) {
+            Missions.update(id, { status: 'routing_failed' }); return;
+          }
 
           for (const orgName of (parsed.new_org_needed || [])) {
             Notifications.create({ id: randomUUID(), user_id: user.id, type: 'org_needed',
@@ -172,7 +188,7 @@ export async function POST(req: NextRequest) {
           }
 
           Missions.update(id, {
-            routing: JSON.stringify(parsed.routing || []),
+            routing: JSON.stringify(routing),
             status: parsed.needs_clarification ? 'needs_clarification' : 'routed',
             steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
               clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [] }),

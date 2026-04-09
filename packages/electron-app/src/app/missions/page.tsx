@@ -14,7 +14,8 @@ interface Routing {
 interface Step {
   org_name: string;
   agent_name: string;
-  status: 'pending' | 'running' | 'done' | 'failed';
+  status: 'pending' | 'queued' | 'waiting' | 'running' | 'done' | 'failed';
+  queue_position?: number;
   output?: string;
   error?: string;
 }
@@ -277,17 +278,23 @@ export default function MissionsPage() {
   };
 
   const STATUS_BADGE: Record<string, { label: string; color: string }> = {
-    pending: { label: '대기', color: 'var(--text-muted)' },
-    running: { label: '실행 중', color: '#f59e0b' },
-    done: { label: '완료', color: 'var(--success)' },
-    failed: { label: '실패', color: 'var(--danger)' },
+    pending:             { label: '대기',    color: 'var(--text-muted)' },
+    analyzing:           { label: '분석 중', color: '#8b5cf6' },
+    routing_failed:      { label: '라우팅 실패', color: 'var(--danger)' },
+    needs_clarification: { label: '확인 필요', color: '#f59e0b' },
+    routed:              { label: '준비됨',  color: '#3b82f6' },
+    running:             { label: '실행 중', color: '#f59e0b' },
+    done:                { label: '완료',    color: 'var(--success)' },
+    failed:              { label: '실패',    color: 'var(--danger)' },
   };
 
   const STEP_ICON: Record<string, string> = {
     pending: '⏳',
+    queued:  '🕐',
+    waiting: '⏸',
     running: '🔄',
-    done: '✅',
-    failed: '❌',
+    done:    '✅',
+    failed:  '❌',
   };
 
   return (

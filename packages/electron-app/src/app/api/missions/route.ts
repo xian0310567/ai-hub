@@ -129,7 +129,10 @@ export async function POST(req: NextRequest) {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const { task, images = [] } = await req.json() as { task: string; images?: string[] };
+  const { task, images = [], parent_mission_id, origin } = await req.json() as {
+    task: string; images?: string[];
+    parent_mission_id?: string; origin?: string;
+  };
   if (!task?.trim()) return Response.json({ ok: false, error: '미션 설명을 입력하세요' }, { status: 400 });
 
   const id = randomUUID();
@@ -150,7 +153,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ ok: false, error: '조직이 없습니다. 먼저 조직을 만드세요.' }, { status: 400 });
   }
 
-  Missions.create({ id, user_id: user.id, task, routing: '[]' });
+  Missions.create({ id, user_id: user.id, task, routing: '[]', parent_mission_id, origin: origin ?? 'user' });
   Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
 
   // Claude CLI 실행 디렉토리 결정 (workspace path가 비어있거나 없으면 cwd 사용)

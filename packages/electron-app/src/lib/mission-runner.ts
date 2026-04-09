@@ -178,6 +178,12 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 지금 바로 시작하세요:`;
 
       const output = await callClaude(prompt, wsPath, modelArgs, true, [], vaultEnv);
+
+      // 증거 없는 완료 불인정
+      if (!output || output.trim().length < 50) {
+        throw new Error('완료 증거 미제출 — 결과물이 너무 짧거나 비어 있음');
+      }
+
       MissionJobs.finish(jobId, output);
       steps[idx] = { ...steps[idx], status: 'done', output };
       Missions.update(missionId, { steps: JSON.stringify(steps) });

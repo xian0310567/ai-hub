@@ -97,6 +97,36 @@ function startMissionScheduler() {
     }
   }, POLL_MS);
 
+  // ── 잡 타임아웃 감시 (5분마다, 30분 초과 실행 중 잡 강제 실패) ────
+  const JOB_TIMEOUT_SEC = 30 * 60; // 30분
+  setInterval(() => {
+    const cutoff = Math.floor(Date.now() / 1000) - JOB_TIMEOUT_SEC;
+    const stuck = schedDb.prepare(`
+      SELECT j.*, m.user_id
+        FROM mission_jobs j
+        JOIN missions m ON m.id = j.mission_id
+       WHERE j.status='running' AND j.started_at IS NOT NULL AND j.started_at < ?
+    `).all(cutoff) as any[];
+
+    for (const job of stuck) {
+      schedDb.prepare(
+        "UPDATE mission_jobs SET status='failed', error=?, finished_at=unixepoch() WHERE id=?"
+      ).run('타임아웃: 30분 초과 (강제 실패)', job.id);
+
+      schedDb.prepare(
+        "UPDATE missions SET status='failed', updated_at=unixepoch() WHERE id=? AND status='running'"
+      ).run(job.mission_id);
+
+      // 알림 생성
+      const notifId = randomUUID();
+      schedDb.prepare(
+        "INSERT OR IGNORE INTO notifications(id,user_id,type,title,message) VALUES(?,?,'warning',?,?)"
+      ).run(notifId, job.user_id ?? '', `잡 타임아웃: ${job.agent_name}`, `30분 초과로 강제 실패 처리됨 (미션: ${job.mission_id.slice(0, 8)}...)`);
+
+      console.warn(`[job-watchdog] 타임아웃 강제 실패: job=${job.id} agent=${job.agent_name}`);
+    }
+  }, 5 * 60 * 1000);
+
   console.log(`🕐 미션 스케줄러 시작 (${POLL_MS / 1000}초 간격)`);
 }
 

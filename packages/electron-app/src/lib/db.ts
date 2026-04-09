@@ -43,16 +43,18 @@ db.exec(`
 
   -- 미션 (로컬 Claude CLI 실행 단위)
   CREATE TABLE IF NOT EXISTS missions (
-    id          TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    task        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    routing     TEXT NOT NULL DEFAULT '[]',
-    steps       TEXT NOT NULL DEFAULT '[]',
-    final_doc   TEXT NOT NULL DEFAULT '',
-    images      TEXT NOT NULL DEFAULT '[]',
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL,
+    task              TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    routing           TEXT NOT NULL DEFAULT '[]',
+    steps             TEXT NOT NULL DEFAULT '[]',
+    final_doc         TEXT NOT NULL DEFAULT '',
+    images            TEXT NOT NULL DEFAULT '[]',
+    parent_mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
+    origin            TEXT NOT NULL DEFAULT 'user',
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at        INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   -- 미션 잡 큐 (에이전트별 순차 실행)
@@ -86,6 +88,10 @@ db.exec(`
     created_at     INTEGER NOT NULL DEFAULT (unixepoch())
   );
 `);
+
+// 마이그레이션: 기존 DB에 신규 컬럼 추가 (이미 있으면 무시)
+try { db.exec("ALTER TABLE missions ADD COLUMN parent_mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL"); } catch {}
+try { db.exec("ALTER TABLE missions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"); } catch {}
 
 // 서버 재시작 시 stuck 잡 정리
 db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
@@ -122,8 +128,10 @@ export const Notifications = {
 export const Missions = {
   list:   (userId: string) => db.prepare('SELECT * FROM missions WHERE user_id=? ORDER BY created_at DESC').all(userId) as Mission[],
   get:    (id: string) => db.prepare('SELECT * FROM missions WHERE id=?').get(id) as Mission | undefined,
-  create: (m: { id: string; user_id: string; task: string; routing: string }) =>
-    db.prepare('INSERT INTO missions(id,user_id,task,routing) VALUES(?,?,?,?)').run(m.id, m.user_id, m.task, m.routing),
+  create: (m: { id: string; user_id: string; task: string; routing: string; parent_mission_id?: string; origin?: string }) =>
+    db.prepare('INSERT INTO missions(id,user_id,task,routing,parent_mission_id,origin) VALUES(?,?,?,?,?,?)')
+      .run(m.id, m.user_id, m.task, m.routing, m.parent_mission_id ?? null, m.origin ?? 'user'),
+  listByParent: (parentId: string) => db.prepare("SELECT * FROM missions WHERE parent_mission_id=? ORDER BY created_at ASC").all(parentId) as Mission[],
   update: (id: string, fields: Partial<Mission>) => {
     const sets = Object.keys(fields).map(k => `${k}=?`).join(',') + ',updated_at=unixepoch()';
     db.prepare(`UPDATE missions SET ${sets} WHERE id=?`).run(...Object.values(fields), id);
@@ -174,6 +182,7 @@ export interface Notification {
 export interface Mission {
   id: string; user_id: string; task: string; status: string;
   routing: string; steps: string; final_doc: string; images?: string;
+  parent_mission_id?: string; origin: string;
   created_at?: number; updated_at?: number;
 }
 export interface MissionJob {

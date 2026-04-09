@@ -116,6 +116,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
           const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie);
 
+          // 증거 없는 완료 불인정
+          if (!output || output.trim().length < 50) {
+            throw new Error('완료 증거 미제출 — 결과물이 너무 짧거나 비어 있음');
+          }
+
           MissionJobs.finish(jobId, output);
           if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'completed', result: output }, cookie);
           steps[idx] = { ...steps[idx], status: 'done', output };

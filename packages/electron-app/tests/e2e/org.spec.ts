@@ -14,6 +14,18 @@ test.describe('조직 관리 (/org)', () => {
     await expect(page.getByRole('button', { name: '+ 부문' })).toBeVisible({ timeout: 5_000 });
   });
 
+  test('nav — 표준 nav 링크 존재 (대시보드·미션·스케줄)', async ({ page }) => {
+    await expect(page.locator('nav a[href="/"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('nav a[href="/missions"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('nav a[href="/schedules"]')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('nav — 조직 관리 active 표시', async ({ page }) => {
+    // 조직 관리는 active span (링크 아닌 span)으로 표시
+    const active = page.locator('nav span').filter({ hasText: '조직 관리' });
+    await expect(active).toBeVisible({ timeout: 5_000 });
+  });
+
   test('부문(Division) 생성', async ({ page }) => {
     await page.getByRole('button', { name: '+ 부문' }).click();
     await page.waitForTimeout(400);

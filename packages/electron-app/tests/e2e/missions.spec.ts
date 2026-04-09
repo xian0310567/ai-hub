@@ -35,4 +35,32 @@ test.describe('미션 (/missions)', () => {
     const res = await page.request.get('/api/notifications');
     expect(res.status()).toBe(200);
   });
+
+  test('미션 삭제 버튼 — 확인 다이얼로그 출력', async ({ page }) => {
+    // 미션이 있을 때만 테스트 (없으면 skip)
+    const deleteBtn = page.locator('button').filter({ hasText: '✕' }).first();
+    if (await deleteBtn.count() === 0) { test.skip(); return; }
+
+    let dialogShown = false;
+    page.once('dialog', async dialog => {
+      dialogShown = true;
+      await dialog.dismiss(); // 실제 삭제는 하지 않음
+    });
+
+    await deleteBtn.click();
+    await page.waitForTimeout(500);
+    expect(dialogShown).toBe(true);
+  });
+
+  test('nav — 대시보드·스케줄 링크 존재', async ({ page }) => {
+    await expect(page.locator('nav a[href="/"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('nav a[href="/schedules"]')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('API: 삭제된 채팅 API 미존재 — 404', async ({ page }) => {
+    const r1 = await page.request.post('/api/chat/send', { data: {} });
+    expect(r1.status()).toBe(404);
+    const r2 = await page.request.get('/api/chat/history/test-agent');
+    expect(r2.status()).toBe(404);
+  });
 });

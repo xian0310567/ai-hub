@@ -284,12 +284,6 @@ export default function OrgPage() {
 
       <div style={{padding:'24px 32px',maxWidth:900}}>
 
-        {/* 조직 관리 액션 버튼 */}
-        <div style={{display:'flex',gap:8,marginBottom:20}}>
-          <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
-          <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
-        </div>
-
         {/* 통계 카드 */}
         <div style={{display:'flex',gap:12,marginBottom:28}}>
           {[
@@ -304,6 +298,12 @@ export default function OrgPage() {
               <div className="org-stat-lbl">{c.label}</div>
             </div>
           ))}
+        </div>
+
+        {/* 조직 관리 액션 버튼 */}
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
+          <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
         </div>
 
         {divs.length===0 && standalone.length===0 && (

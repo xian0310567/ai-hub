@@ -29,13 +29,25 @@ test.describe('메인 대시보드', () => {
   });
 
   test('모든 서브페이지 접근 — 크래시 없음', async ({ page }) => {
-    const routes = ['/org', '/tasks', '/vault', '/settings', '/live', '/missions'];
+    const routes = ['/org', '/tasks', '/vault', '/settings', '/live', '/missions', '/schedules'];
     for (const route of routes) {
       await page.goto(route, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(500);
       expect(page.url()).not.toContain('/login');
       await expect(page.locator('body')).not.toBeEmpty();
     }
+  });
+
+  test('nav — 미션 링크 존재', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    await expect(page.locator('nav a[href="/missions"]')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('nav — 스케줄 링크 존재', async ({ page }) => {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    await expect(page.locator('nav a[href="/schedules"]')).toBeVisible({ timeout: 5_000 });
   });
 
   test('API /api/auth/me — 인증 상태 확인', async ({ page }) => {

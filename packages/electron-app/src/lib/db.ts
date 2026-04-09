@@ -178,8 +178,8 @@ export const MissionJobs = {
     db.prepare('INSERT INTO mission_jobs(id,mission_id,agent_id,agent_name,org_name,subtask,gate_type) VALUES(?,?,?,?,?,?,?)')
       .run(j.id, j.mission_id, j.agent_id, j.agent_name, j.org_name, j.subtask, j.gate_type ?? 'auto'),
   listByMission:   (missionId: string) => db.prepare('SELECT * FROM mission_jobs WHERE mission_id=? ORDER BY queued_at').all(missionId) as MissionJob[],
-  queueForAgent:   (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status IN ('queued','running') ORDER BY queued_at").all(agentId) as MissionJob[],
-  runningForAgent: (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status='running'").get(agentId) as MissionJob | undefined,
+  queueForAgent:   (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status IN ('queued','running','gate_pending') ORDER BY queued_at").all(agentId) as MissionJob[],
+  runningForAgent: (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status IN ('running','gate_pending')").get(agentId) as MissionJob | undefined,
   nextQueued:      (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status='queued' ORDER BY queued_at LIMIT 1").get(agentId) as MissionJob | undefined,
   start:           (id: string) => db.prepare("UPDATE mission_jobs SET status='running', started_at=unixepoch() WHERE id=?").run(id),
   finish:          (id: string, result: string) => db.prepare("UPDATE mission_jobs SET status='done', result=?, finished_at=unixepoch() WHERE id=?").run(result, id),

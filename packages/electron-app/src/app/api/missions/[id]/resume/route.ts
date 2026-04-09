@@ -4,9 +4,10 @@
  * 실패했거나 아직 실행 안 된 라우팅 항목만 다시 돌린다.
  */
 import { NextRequest } from 'next/server';
-import { Missions, MissionJobs } from '@/lib/db';
+import { Missions, MissionJobs, McpServerConfigs } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
 import { readAllPersonalSecrets } from '@/lib/personal-vault';
+import { scoreJob } from '@/lib/quality-scorer';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -118,6 +119,23 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
+// ── MCP 설정 파일 생성 ─────────────────────────────────────────────────
+async function buildMcpConfigFile(userId: string, missionId: string): Promise<string | null> {
+  try {
+    const configs = McpServerConfigs.listEnabled(userId);
+    if (!configs.length) return null;
+    const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+    for (const c of configs) {
+      const args = JSON.parse(c.args || '[]');
+      const env  = JSON.parse(c.env_json || '{}');
+      mcpServers[c.name] = { command: c.command, args, ...(Object.keys(env).length ? { env } : {}) };
+    }
+    const tmpPath = path.join('/tmp', `mcp-config-resume-${missionId}.json`);
+    fs.writeFileSync(tmpPath, JSON.stringify({ mcpServers }, null, 2));
+    return tmpPath;
+  } catch { return null; }
+}
+
 // ── Human Gate 승인 대기 ───────────────────────────────────────────────
 async function waitForApproval(jobId: string) {
   const MAX_WAIT = 30 * 60 * 1000;
@@ -149,20 +167,36 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const cookie = getVmSessionCookie(req);
   const vaultEnv = await collectVaultEnv(user.id, cookie);
 
-  // 기존 잡 조회 — 이미 'done'인 항목은 건너뜀
-  const existingJobs = MissionJobs.listByMission(id);
+  // MCP 설정 파일 생성
+  const mcpConfigPath = await buildMcpConfigFile(user.id, id);
+
+  // 기존 잡 조회 — routing 순서(agent_id+subtask)로 매칭해 인덱스 정렬 문제 방지
+  const allJobs = MissionJobs.listByMission(id);
   const prevSteps: Step[] = (() => {
-    try { return JSON.parse(mission.steps || '[]'); } catch { return []; }
+    try {
+      const parsed = JSON.parse(mission.steps || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
   })();
+
+  // routing 항목별로 가장 최근 'done' 잡을 찾아 매칭
+  const latestDoneByKey = new Map<string, typeof allJobs[0]>();
+  for (const job of allJobs) {
+    if (job.status === 'done') {
+      const key = `${job.agent_id}::${job.subtask}`;
+      latestDoneByKey.set(key, job); // 마지막(최신) done 잡 유지
+    }
+  }
 
   // 재개 대상 routing 항목과 새 jobId 결정
   const resumeRouting: RoutingEntry[] = [];
   const newJobIds: string[] = [];
   const steps: Step[] = routing.map((r, i) => {
-    const existingJob = existingJobs[i];
-    if (existingJob?.status === 'done') {
+    const key = `${r.agent_id}::${r.subtask}`;
+    const doneJob = latestDoneByKey.get(key);
+    if (doneJob) {
       // 완료 항목은 그대로 유지
-      return prevSteps[i] ?? { org_name: r.org_name, agent_name: r.agent_name, status: 'done', output: existingJob.result };
+      return prevSteps[i] ?? { org_name: r.org_name, agent_name: r.agent_name, status: 'done', output: doneJob.result };
     }
     // 재실행 대상
     const jobId = randomUUID();
@@ -258,6 +292,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             try { JSON.parse(mission.images).forEach((img: { path: string }) => { if (img.path) imagePaths.push(img.path); }); } catch {}
           }
           const modelArgs = agent?.model ? ['--model', agent.model] : [];
+          const mcpArgs = mcpConfigPath ? ['--mcp-config', mcpConfigPath] : [];
           const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션 (재개)
 전체 미션: ${mission.task}
 
@@ -271,13 +306,14 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 
 지금 바로 시작하세요:`;
 
-          const output = await callClaude(prompt, wsPath, modelArgs, imagePaths, vaultEnv);
+          const output = await callClaude(prompt, wsPath, [...modelArgs, ...mcpArgs], imagePaths, vaultEnv);
 
           if (!output || output.trim().length < 50) {
             throw new Error('완료 증거 미제출 — 결과물이 너무 짧거나 비어 있음');
           }
 
           MissionJobs.finish(jobId, output);
+          scoreJob(jobId, user.id); // fire-and-forget 품질 채점
           if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'completed', result: output }, cookie);
           steps[idx] = { ...steps[idx], status: 'done', output };
           Missions.update(id, { steps: JSON.stringify(steps) });
@@ -317,6 +353,8 @@ ${resultBlock}
       } catch (e: unknown) {
         Missions.update(id, { status: 'failed', steps: JSON.stringify(steps) });
         send({ type: 'error', error: `통합 문서 생성 실패: ${e instanceof Error ? e.message : String(e)}` });
+      } finally {
+        if (mcpConfigPath) { try { fs.unlinkSync(mcpConfigPath); } catch {} }
       }
       controller.close();
     },

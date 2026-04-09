@@ -37,8 +37,14 @@ function buildOrgChart(org: Awaited<ReturnType<typeof fetchOrgData>>): string {
   const { divisions, workspaces, teams, parts, agents } = org;
   const lines: string[] = [];
 
+  // 부문 소속 workspace id 집합
+  const divWorkspaceIds = (divId: string) =>
+    new Set(workspaces.filter((w: any) => w.division_id === divId).map((w: any) => w.id));
+
   for (const div of divisions) {
-    const divLead = agents.find((a: any) => a.org_level === 'division' && a.workspace_id === div.id);
+    // 부문 리더: org_level==='division' 이고 소속 workspace가 이 부문에 속하는 에이전트
+    const divWsIds = divWorkspaceIds(div.id);
+    const divLead = agents.find((a: any) => a.org_level === 'division' && divWsIds.has(a.workspace_id));
     lines.push(`◉ 부문: ${div.name} (id: ${div.id})`);
     if (divLead) lines.push(`  리더: ${divLead.emoji} ${divLead.name} (agent_id: ${divLead.id})`);
 
@@ -115,12 +121,31 @@ async function saveImages(userId: string, missionId: string, images: string[]) {
   return saved;
 }
 
+// ── steps 파싱 유틸 — routing 메타(object) vs 실행 Step[](array) 모두 처리 ──
+function parseStepsField(raw: string | undefined): { steps: any[]; summary?: string; routingMeta?: any } {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) return { steps: parsed };
+    // routing 분석 결과 메타 객체 (summary, is_recurring 등)
+    return { steps: [], summary: parsed.summary, routingMeta: parsed };
+  } catch { return { steps: [] }; }
+}
+
 // ── GET /api/missions ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const missions = Missions.list(user.id).map(m => ({ ...m, images: m.images ? JSON.parse(m.images) : [] }));
+  const missions = Missions.list(user.id).map(m => {
+    const { steps, summary, routingMeta } = parseStepsField(m.steps);
+    return {
+      ...m,
+      images: m.images ? JSON.parse(m.images) : [],
+      steps,
+      summary,
+      routingMeta,
+    };
+  });
   return Response.json({ ok: true, missions });
 }
 

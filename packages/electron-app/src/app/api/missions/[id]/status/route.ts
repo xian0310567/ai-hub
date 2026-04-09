@@ -36,10 +36,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return Response.json({ ok: false, error: '권한이 없습니다' }, { status: 403 });
   }
 
-  // steps 파싱
+  // steps 파싱 — routing 메타 객체(object)와 실행 Step[] 배열 모두 처리
   let steps: Step[] = [];
   try {
-    steps = JSON.parse(mission.steps || '[]');
+    const parsed = JSON.parse(mission.steps || '[]');
+    steps = Array.isArray(parsed) ? parsed : [];
   } catch {
     steps = [];
   }

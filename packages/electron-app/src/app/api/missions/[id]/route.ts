@@ -13,12 +13,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return Response.json({ ok: false, error: '미션 없음' }, { status: 404 });
   }
 
+  const stepsRaw = mission.steps || '[]';
+  let steps: any[] = [];
+  let summary: string | undefined;
+  let routingMeta: any;
+  try {
+    const parsed = JSON.parse(stepsRaw);
+    if (Array.isArray(parsed)) { steps = parsed; }
+    else { steps = []; summary = parsed?.summary; routingMeta = parsed; }
+  } catch {}
+
   return Response.json({
     ok: true,
     mission: {
       ...mission,
       routing: JSON.parse(mission.routing || '[]'),
-      steps: JSON.parse(mission.steps || '[]'),
+      steps,
+      summary,
+      routingMeta,
     },
   });
 }

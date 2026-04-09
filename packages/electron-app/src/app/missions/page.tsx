@@ -220,7 +220,7 @@ export default function MissionsPage() {
     setAttachedImages(prev => prev.filter(img => img.id !== id));
   };
 
-  // 미션 생성 (라우팅 분석)
+  // 미션 생성 (라우팅 분석) — routing 완료까지 폴링 후 뷰 전환
   const createMission = async () => {
     if (!task.trim()) { setErr('미션을 설명하세요'); return; }
     setLoading(true); setErr('');
@@ -235,9 +235,25 @@ export default function MissionsPage() {
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
-      setCurrent(d.mission);
+
+      // routing 분석이 완료될 때까지 폴링 (최대 120초)
+      let mission = d.mission;
+      const deadline = Date.now() + 120_000;
+      while (mission.status === 'analyzing' && Date.now() < deadline) {
+        await new Promise(res => setTimeout(res, 2500));
+        const pollRes = await fetch(`/api/missions/${mission.id}`).catch(() => null);
+        if (pollRes?.ok) {
+          const pollData = await pollRes.json();
+          if (pollData.ok) mission = pollData.mission;
+        }
+      }
+
+      if (mission.status === 'routing_failed') throw new Error('라우팅 분석 실패 — 다시 시도해주세요');
+      if (mission.status === 'analyzing') throw new Error('라우팅 분석 시간 초과 — 다시 시도해주세요');
+
+      setCurrent({ ...mission, routing: mission.routing || [] });
       setView('routing');
-      setAttachedImages([]); // 성공 시 첨부 이미지 초기화
+      setAttachedImages([]);
     } catch (e: any) { setErr(e.message || '오류'); }
     setLoading(false);
   };

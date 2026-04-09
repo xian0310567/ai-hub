@@ -16,6 +16,7 @@ const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
 interface RoutingEntry {
   org_id: string; org_type: string; org_name: string;
   agent_id: string; agent_name: string; subtask: string;
+  gate_type?: 'auto' | 'human';
 }
 
 async function vmGet(endpoint: string, cookie = '') {
@@ -139,11 +140,11 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
   const jobIds: string[] = [];
   for (const r of routing) {
     const jobId = randomUUID();
-    MissionJobs.create({ id: jobId, mission_id: missionId, agent_id: r.agent_id, agent_name: r.agent_name, org_name: r.org_name, subtask: r.subtask });
+    MissionJobs.create({ id: jobId, mission_id: missionId, agent_id: r.agent_id, agent_name: r.agent_name, org_name: r.org_name, subtask: r.subtask, gate_type: r.gate_type ?? 'auto' });
     jobIds.push(jobId);
   }
 
-  // 초기 step 상태 저장
+  // 초기 step 상태 저장 (steps 컬럼은 항상 배열로 초기화)
   const steps: Record<string, any>[] = routing.map((r, i) => {
     const queue = MissionJobs.queueForAgent(r.agent_id);
     const pos = queue.findIndex(j => j.id === jobIds[i]);

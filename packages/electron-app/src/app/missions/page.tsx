@@ -304,6 +304,7 @@ export default function MissionsPage() {
         <a href="/" style={navLink}>대시보드</a>
         <a href="/org" style={navLink}>조직 관리</a>
         <span style={{ ...navLink, color: 'var(--accent)', borderColor: 'var(--accent-dim)' }}>미션</span>
+        <a href="/schedules" style={navLink}>스케줄</a>
         <button
           onClick={async () => {
             if (confirm('로그아웃하시겠습니까?')) {
@@ -547,6 +548,27 @@ export default function MissionsPage() {
                 💡 {current.summary}
               </div>
             )}
+
+            {/* 반복 미션 스케줄 배지 */}
+            {(() => {
+              try {
+                const stepsData = typeof current.steps === 'string' ? JSON.parse(current.steps) : current.steps;
+                if (stepsData?.is_recurring && stepsData?.cron_expr) {
+                  return (
+                    <div style={{ padding: '10px 14px', background: '#0891b208', border: '1px solid #0891b240', borderRadius: 6, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <span style={{ fontSize: 16 }}>🕐</span>
+                      <div>
+                        <span style={{ fontWeight: 600, color: '#0891b2' }}>반복 미션으로 스케줄 등록됨</span>
+                        {stepsData.schedule_name && <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>— {stepsData.schedule_name}</span>}
+                        <code style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{stepsData.cron_expr}</code>
+                      </div>
+                      <a href="/schedules" style={{ marginLeft: 'auto', fontSize: 11, color: '#0891b2', textDecoration: 'none', border: '1px solid #0891b240', borderRadius: 4, padding: '3px 8px' }}>스케줄 관리 →</a>
+                    </div>
+                  );
+                }
+              } catch {}
+              return null;
+            })()}
 
             {/* 통계 요약 카드 */}
             {(() => {

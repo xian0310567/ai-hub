@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { Missions, Notifications } from '@/lib/db';
+import { Missions, Notifications, MissionSchedules } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import cronParser from 'cron-parser';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -191,8 +192,27 @@ export async function POST(req: NextRequest) {
             routing: JSON.stringify(routing),
             status: parsed.needs_clarification ? 'needs_clarification' : 'routed',
             steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
-              clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [] }),
+              clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [],
+              is_recurring: parsed.is_recurring || false, schedule_name: parsed.schedule_name || null,
+              cron_expr: parsed.cron_expr || null }),
           });
+
+          // 반복 미션이면 스케줄 생성
+          if (parsed.is_recurring && parsed.cron_expr && !parsed.needs_clarification) {
+            try {
+              const interval = cronParser.parseExpression(parsed.cron_expr);
+              const nextTs = Math.floor(interval.next().getTime() / 1000);
+              MissionSchedules.create({
+                id: randomUUID(),
+                user_id: user.id,
+                name: parsed.schedule_name || task.slice(0, 60),
+                cron_expr: parsed.cron_expr,
+                task,
+                routing: JSON.stringify(routing),
+                next_run_at: nextTs,
+              });
+            } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
+          }
         } catch { Missions.update(id, { status: 'routing_failed' }); }
       }
     );
@@ -249,6 +269,15 @@ ${task}
   "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[]}],
   "needs_clarification": false,
   "clarification": null,
-  "new_org_needed": []
-}`;
+  "new_org_needed": [],
+  "is_recurring": false,
+  "cron_expr": null,
+  "schedule_name": null
+}
+
+is_recurring 판단 기준:
+- 사용자 요청에 "매일", "매주", "매월", "정기적으로", "자동으로", "반복", "every", "daily", "weekly" 등의 반복 의도가 있으면 true
+- is_recurring이 true면 cron_expr에 표준 5필드 cron 표현식 작성 (예: "0 9 * * 1-5" = 평일 오전 9시)
+- schedule_name은 이 스케줄의 짧은 이름 (예: "일일 리포트", "주간 요약")
+- 반복 의도가 없으면 세 필드 모두 기본값 유지`;
 }

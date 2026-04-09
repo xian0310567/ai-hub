@@ -70,6 +70,20 @@ db.exec(`
     started_at  INTEGER,
     finished_at INTEGER
   );
+
+  -- 반복 미션 스케줄
+  CREATE TABLE IF NOT EXISTS mission_schedules (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    cron_expr   TEXT NOT NULL,
+    task        TEXT NOT NULL,
+    routing     TEXT NOT NULL DEFAULT '[]',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    last_run_at INTEGER,
+    next_run_at INTEGER,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 // 서버 재시작 시 stuck 잡 정리
@@ -132,6 +146,22 @@ export const MissionJobs = {
   get:             (id: string) => db.prepare('SELECT * FROM mission_jobs WHERE id=?').get(id) as MissionJob | undefined,
 };
 
+export const MissionSchedules = {
+  list:    (userId: string) => db.prepare('SELECT * FROM mission_schedules WHERE user_id=? ORDER BY created_at DESC').all(userId) as MissionSchedule[],
+  listDue: () => db.prepare('SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= unixepoch()').all() as MissionSchedule[],
+  get:     (id: string) => db.prepare('SELECT * FROM mission_schedules WHERE id=?').get(id) as MissionSchedule | undefined,
+  create:  (s: { id: string; user_id: string; name: string; cron_expr: string; task: string; routing: string; next_run_at: number }) =>
+    db.prepare('INSERT INTO mission_schedules(id,user_id,name,cron_expr,task,routing,next_run_at) VALUES(?,?,?,?,?,?,?)').run(s.id, s.user_id, s.name, s.cron_expr, s.task, s.routing, s.next_run_at),
+  update:  (id: string, fields: Partial<MissionSchedule>) => {
+    const sets = Object.keys(fields).map(k => `${k}=?`).join(',');
+    db.prepare(`UPDATE mission_schedules SET ${sets} WHERE id=?`).run(...Object.values(fields), id);
+  },
+  delete:  (id: string) => db.prepare('DELETE FROM mission_schedules WHERE id=?').run(id),
+  setEnabled: (id: string, enabled: boolean) => db.prepare('UPDATE mission_schedules SET enabled=? WHERE id=?').run(enabled ? 1 : 0, id),
+  tick:    (id: string, lastRunAt: number, nextRunAt: number) =>
+    db.prepare('UPDATE mission_schedules SET last_run_at=?, next_run_at=? WHERE id=?').run(lastRunAt, nextRunAt, id),
+};
+
 // ── 인터페이스 ────────────────────────────────────────────────────────
 
 export interface ChatLog {
@@ -150,4 +180,9 @@ export interface MissionJob {
   org_name: string; subtask: string; status: string;
   result: string; error: string;
   queued_at?: number; started_at?: number; finished_at?: number;
+}
+export interface MissionSchedule {
+  id: string; user_id: string; name: string; cron_expr: string;
+  task: string; routing: string; enabled: number;
+  last_run_at?: number; next_run_at?: number; created_at?: number;
 }

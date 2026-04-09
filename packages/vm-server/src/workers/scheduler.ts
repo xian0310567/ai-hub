@@ -3,7 +3,8 @@
  * Runs inside the vm-server process.
  */
 
-import { parseExpression } from 'cron-parser';
+import cronParser from 'cron-parser';
+const { parseExpression } = cronParser;
 import { getPool, exec, newId, now } from '../db/pool.js';
 
 const SCHEDULER_INTERVAL_MS = Number(process.env.SCHEDULER_POLL_MS) || 60_000;

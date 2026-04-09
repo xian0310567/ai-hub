@@ -11,12 +11,12 @@ export async function workspaceRoutes(app: FastifyInstance) {
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
-    const { name, path, division_id } = req.body as { name: string; path: string; division_id?: string };
-    if (!name || !path) return reply.code(400).send({ error: 'name and path required' });
+    const { name, path, division_id } = req.body as { name: string; path?: string; division_id?: string };
+    if (!name) return reply.code(400).send({ error: 'name required' });
 
     const id = newId();
     await exec('INSERT INTO workspaces(id,org_id,name,path,division_id) VALUES(?,?,?,?,?)',
-      [id, user.orgId, name, path, division_id ?? null]);
+      [id, user.orgId, name, path ?? '', division_id ?? null]);
     return reply.code(201).send(await q1('SELECT * FROM workspaces WHERE id = ?', [id]));
   });
 

@@ -45,31 +45,66 @@ export default function OrgPage() {
   const [harnessLoading, setHarnessLoading] = useState(false);
 
   const reload = useCallback(() => {
-    fetch('/api/divisions').then(r=>r.json()).then(d=>{
-      if (d.ok) {
-        setDivs(d.divisions);
-        setStandalone(d.standalone);
-        // 모든 노드 ID를 수집해서 기본 전체 펼침
-        const ids = new Set<string>();
-        for (const div of d.divisions) {
-          ids.add(div.id);
-          for (const dept of div.departments) {
-            ids.add(dept.id);
-            for (const team of dept.teams) {
-              ids.add(team.id);
-              for (const part of team.parts) ids.add(part.id);
-            }
-          }
+    Promise.all([
+      fetch('/api/divisions').then(r => r.json()).catch(() => []),
+      fetch('/api/workspaces').then(r => r.json()).catch(() => []),
+      fetch('/api/teams').then(r => r.json()).catch(() => []),
+    ]).then(([rawDivs, rawWs, rawTeams]) => {
+      if (!Array.isArray(rawDivs)) {
+        if (rawDivs?.error === 'Unauthorized') { router.replace('/login'); return; }
+        rawDivs = [];
+      }
+
+      // Build teams map keyed by workspace_id
+      const teamsMap: Record<string, Team[]> = {};
+      for (const t of (Array.isArray(rawTeams) ? rawTeams : [])) {
+        const wsId = t.workspace_id;
+        if (!teamsMap[wsId]) teamsMap[wsId] = [];
+        teamsMap[wsId].push({ ...t, lead: null, workers: [], parts: [] });
+      }
+
+      // Build departments (workspaces), keyed by division_id
+      const deptsByDiv: Record<string, Dept[]> = {};
+      const standalone: Dept[] = [];
+      for (const ws of (Array.isArray(rawWs) ? rawWs : [])) {
+        const dept: Dept = { ...ws, lead: null, teams: teamsMap[ws.id] ?? [] };
+        if (ws.division_id) {
+          if (!deptsByDiv[ws.division_id]) deptsByDiv[ws.division_id] = [];
+          deptsByDiv[ws.division_id].push(dept);
+        } else {
+          standalone.push(dept);
         }
-        for (const dept of d.standalone) {
+      }
+
+      // Build divisions with nested departments
+      const divList: Div[] = (rawDivs as any[]).map((x: any) => ({
+        ...x,
+        lead: null,
+        departments: deptsByDiv[x.id] ?? [],
+      }));
+
+      setDivs(divList);
+      setStandalone(standalone);
+
+      const ids = new Set<string>();
+      for (const div of divList) {
+        ids.add(div.id);
+        for (const dept of div.departments) {
           ids.add(dept.id);
           for (const team of dept.teams) {
             ids.add(team.id);
             for (const part of team.parts) ids.add(part.id);
           }
         }
-        setExpanded(ids);
-      } else if (d.error === 'Unauthorized') router.replace('/login');
+      }
+      for (const dept of standalone) {
+        ids.add(dept.id);
+        for (const team of dept.teams) {
+          ids.add(team.id);
+          for (const part of team.parts) ids.add(part.id);
+        }
+      }
+      setExpanded(ids);
     });
   }, [router]);
 
@@ -423,7 +458,7 @@ function AddForm({ form, onClose, onDone }: { form:FormState; onClose:()=>void; 
 
       const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!d.ok && !d.id) throw new Error(d.error || '오류 발생');
       onDone();
     } catch (e:any) { setErr(e.message||'오류 발생'); }
     setLoading(false);
@@ -554,7 +589,7 @@ function EditForm({ type, data, onClose, onDone }: {
       }
       const r = await fetch(url, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!d.ok && !d.id) throw new Error(d.error || '오류 발생');
       onDone();
     } catch(e:any) { setErr(e.message || '오류'); }
     setLoading(false);

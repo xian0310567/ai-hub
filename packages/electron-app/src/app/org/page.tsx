@@ -46,42 +46,23 @@ export default function OrgPage() {
 
   const reload = useCallback(() => {
     Promise.all([
-      fetch('/api/divisions').then(r => r.json()).catch(() => []),
+      fetch('/api/divisions').then(r => r.json()).catch(() => ({})),
       fetch('/api/workspaces').then(r => r.json()).catch(() => []),
       fetch('/api/teams').then(r => r.json()).catch(() => []),
-    ]).then(([rawDivs, rawWs, rawTeams]) => {
-      if (!Array.isArray(rawDivs)) {
-        if (rawDivs?.error === 'Unauthorized') { router.replace('/login'); return; }
-        rawDivs = [];
-      }
+    ]).then(([rawTree, rawWs, rawTeams]) => {
+      // /api/divisions → /api/divisions/tree: { ok, divisions[], standalone[] }
+      if (rawTree?.error === 'Unauthorized') { router.replace('/login'); return; }
+      let rawDivs: any[] = Array.isArray(rawTree)
+        ? rawTree
+        : Array.isArray(rawTree?.divisions) ? rawTree.divisions : [];
+      const rawStandalone: any[] = Array.isArray(rawTree?.standalone) ? rawTree.standalone : [];
 
-      // Build teams map keyed by workspace_id
-      const teamsMap: Record<string, Team[]> = {};
-      for (const t of (Array.isArray(rawTeams) ? rawTeams : [])) {
-        const wsId = t.workspace_id;
-        if (!teamsMap[wsId]) teamsMap[wsId] = [];
-        teamsMap[wsId].push({ ...t, lead: null, workers: [], parts: [] });
-      }
+      // /tree 응답은 이미 중첩 트리를 포함하므로 그대로 사용
+      // rawWs, rawTeams은 /tree가 없을 때의 fallback용 (미사용)
+      void rawWs; void rawTeams;
 
-      // Build departments (workspaces), keyed by division_id
-      const deptsByDiv: Record<string, Dept[]> = {};
-      const standalone: Dept[] = [];
-      for (const ws of (Array.isArray(rawWs) ? rawWs : [])) {
-        const dept: Dept = { ...ws, lead: null, teams: teamsMap[ws.id] ?? [] };
-        if (ws.division_id) {
-          if (!deptsByDiv[ws.division_id]) deptsByDiv[ws.division_id] = [];
-          deptsByDiv[ws.division_id].push(dept);
-        } else {
-          standalone.push(dept);
-        }
-      }
-
-      // Build divisions with nested departments
-      const divList: Div[] = (rawDivs as any[]).map((x: any) => ({
-        ...x,
-        lead: null,
-        departments: deptsByDiv[x.id] ?? [],
-      }));
+      const divList: Div[] = rawDivs.map((x: any) => ({ ...x }));
+      const standalone: Dept[] = rawStandalone.map((x: any) => ({ ...x }));
 
       setDivs(divList);
       setStandalone(standalone);

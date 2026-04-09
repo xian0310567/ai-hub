@@ -75,6 +75,7 @@ export default function MissionsPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [missionJobs, setMissionJobs] = useState<MissionJob[]>([]);
+  const [boardContent, setBoardContent] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -279,6 +280,8 @@ export default function MissionsPage() {
             const ev = JSON.parse(line.slice(6));
             if (ev.type === 'start') {
               setSteps(ev.steps);
+            } else if (ev.type === 'board_update') {
+              setBoardContent(ev.content);
             } else if (ev.type === 'step') {
               setSteps(prev => prev.map((s, i) =>
                 i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error, job_id: ev.job_id ?? s.job_id } : s
@@ -311,6 +314,7 @@ export default function MissionsPage() {
     setCurrent(mission);
     setSteps(mission.routing.map(r => ({ org_name: r.org_name, agent_name: r.agent_name, status: 'pending' as const })));
     setFinalDoc('');
+    setBoardContent('');
     setErr('');
     await handleSSEStream(mission.id, `/api/missions/${mission.id}/run`);
   };
@@ -320,6 +324,7 @@ export default function MissionsPage() {
     setView('running');
     setCurrent(mission);
     setFinalDoc('');
+    setBoardContent('');
     setErr('');
     // 기존 step 상태 유지 (done 항목은 그대로 보여줌)
     try {
@@ -899,6 +904,29 @@ export default function MissionsPage() {
                 </div>
               )}
             </div>
+
+            {/* 협업 보드 실시간 패널 */}
+            {boardContent && (
+              <div style={{ marginTop: 20, border: '1px solid var(--accent)', borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+                  background: 'var(--accent-dim)', borderBottom: '1px solid var(--accent)33',
+                }}>
+                  <span style={{ fontSize: 12 }}>🤝</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)' }}>협업 보드</span>
+                  <span style={{ fontSize: 10, color: 'var(--accent)', opacity: 0.7, marginLeft: 4 }}>— 에이전트 간 실시간 소통</span>
+                  <span style={{
+                    marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%',
+                    background: 'var(--accent)', display: 'inline-block',
+                  }} />
+                </div>
+                <div style={{
+                  padding: '14px 16px', fontSize: 11, color: 'var(--text-secondary)',
+                  lineHeight: 1.8, whiteSpace: 'pre-wrap', maxHeight: 280, overflowY: 'auto',
+                  background: 'var(--bg-elevated)',
+                }} dangerouslySetInnerHTML={{ __html: renderMd(boardContent) }} />
+              </div>
+            )}
 
             {err && <div style={{ color: 'var(--danger)', fontSize: 11, padding: '6px 10px', background: 'var(--danger-dim)', borderRadius: 4, border: '1px solid #f2482233', marginTop: 10 }}>{err}</div>}
           </div>

@@ -97,6 +97,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       Missions.update(id, { status: 'running', steps: JSON.stringify(steps) });
       send({ type: 'start', steps });
 
+      // 협업 보드 생성 + 실시간 폴링
+      const boardPath = buildMissionBoard(id, mission.task, routing);
+      let boardPollStopped = false;
+      let lastBoardContent = '';
+      (async () => {
+        while (!boardPollStopped) {
+          await new Promise(res => setTimeout(res, 4000));
+          try {
+            const content = fs.readFileSync(boardPath, 'utf8');
+            if (content !== lastBoardContent) { lastBoardContent = content; send({ type: 'board_update', content }); }
+          } catch {}
+        }
+      })();
+
       const results: { org_name: string; agent_name: string; output: string }[] = [];
 
       await Promise.allSettled(routing.map(async (r, idx) => {
@@ -128,7 +142,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try {
           // vm-server에서 에이전트 정보 가져오기
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
-          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie, mcpConfigPath);
+          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie, mcpConfigPath, routing, boardPath);
 
           // 증거 없는 완료 불인정
           if (!output || output.trim().length < 50) {
@@ -152,6 +166,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           results.push({ org_name: r.org_name, agent_name: r.agent_name, output: `[실패: ${msg}]` });
         }
       }));
+      boardPollStopped = true;
 
       send({ type: 'consolidating' });
       try {
@@ -278,7 +293,7 @@ async function callClaude(
 }
 
 // ── 에이전트 작업 실행 ─────────────────────────────────────────────────
-async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}, cookie = '', mcpConfigPath: string | null = null): Promise<string> {
+async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, missionId: string, extraEnv: Record<string, string> = {}, cookie = '', mcpConfigPath: string | null = null, allRouting: RoutingEntry[] = [], boardPath = ''): Promise<string> {
   let wsPath = process.cwd();
   if (agent?.workspace_id) {
     try {
@@ -308,9 +323,17 @@ async function runAgentTask(r: RoutingEntry, missionTask: string, agent: any, mi
 
   const modelArgs = agent?.model ? ['--model', agent.model] : [];
   const mcpArgs = mcpConfigPath ? ['--mcp-config', mcpConfigPath] : [];
+
+  const routingCtx = allRouting.length > 1
+    ? `\n## 전체 실행 계획\n이 미션은 다음 조직들이 동시에 진행합니다:\n${allRouting.map((re, i) => `  ${i + 1}. [${re.org_name}] ${re.agent_name}: ${re.subtask.split('\n')[0].slice(0, 100)}`).join('\n')}\n\n당신의 역할: **${r.org_name} (${r.agent_name})**\n`
+    : '';
+  const boardCtx = boardPath
+    ? `\n## 협업 보드\n모든 에이전트가 공유하는 소통 공간: ${boardPath}\n\n1. 작업 시작 전 보드를 읽어 다른 에이전트의 진행 상황을 파악하세요\n2. 의존성, 이슈, 중요 발견 사항을 보드에 기록하세요\n3. 작업 완료 후 보드 하단에 다음 형식으로 결과를 추가하세요:\n\n### ${r.org_name} (${r.agent_name}) 완료 보고\n[수행한 작업 요약]\n`
+    : '';
+
   const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션
 전체 미션: ${missionTask}${imagePaths.length ? `\n\n**참고: ${imagePaths.length}개 이미지 첨부됨**` : ''}
-
+${routingCtx}${boardCtx}
 ## 배정된 업무
 ${r.subtask}
 
@@ -340,6 +363,20 @@ async function buildMcpConfigFile(userId: string, missionId: string): Promise<st
   } catch {
     return null;
   }
+}
+
+// ── 협업 보드 생성 ──────────────────────────────────────────────────────
+function buildMissionBoard(missionId: string, task: string, routingEntries: RoutingEntry[]): string {
+  const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+  const boardsDir = path.join(dataDir, 'boards');
+  fs.mkdirSync(boardsDir, { recursive: true });
+  const boardPath = path.join(boardsDir, `mission-${missionId}.md`);
+  const plan = routingEntries.map((r, i) =>
+    `| ${i + 1} | ${r.org_name} | ${r.agent_name} | ${r.subtask.replace(/\n+/g, ' ').slice(0, 100)} |`
+  ).join('\n');
+  const content = `# 미션 협업 보드\n\n## 미션 목표\n${task}\n\n## 전체 실행 계획\n| # | 조직 | 에이전트 | 담당 업무 요약 |\n|---|------|---------|---------------|\n${plan}\n\n---\n> 이 보드는 모든 에이전트가 공유하는 소통 공간입니다.\n> 작업 시작 시 이 파일을 읽고, 완료 후 아래에 결과를 기록해 주세요.\n\n## 에이전트 소통 기록\n\n`;
+  fs.writeFileSync(boardPath, content, 'utf8');
+  return boardPath;
 }
 
 // ── 최종 통합 문서 ─────────────────────────────────────────────────────

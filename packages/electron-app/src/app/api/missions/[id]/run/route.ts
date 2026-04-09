@@ -14,11 +14,12 @@ const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
 interface RoutingEntry {
   org_id: string; org_type: string; org_name: string;
   agent_id: string; agent_name: string; subtask: string;
+  gate_type?: 'auto' | 'human';
 }
 interface Step {
   org_name: string; agent_name: string;
-  status: 'queued' | 'waiting' | 'running' | 'done' | 'failed';
-  queue_position?: number; output?: string; error?: string;
+  status: 'queued' | 'waiting' | 'running' | 'done' | 'failed' | 'gate_pending';
+  queue_position?: number; output?: string; error?: string; job_id?: string;
 }
 
 // vm-server API 헬퍼
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const vmTaskIds: string[] = [];
   for (const r of routing) {
     const jobId = randomUUID();
-    MissionJobs.create({ id: jobId, mission_id: id, agent_id: r.agent_id, agent_name: r.agent_name, org_name: r.org_name, subtask: r.subtask });
+    MissionJobs.create({ id: jobId, mission_id: id, agent_id: r.agent_id, agent_name: r.agent_name, org_name: r.org_name, subtask: r.subtask, gate_type: r.gate_type ?? 'auto' });
     jobIds.push(jobId);
 
     const task = await vmPost('/api/tasks', {
@@ -104,6 +105,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           Missions.update(id, { steps: JSON.stringify(steps) });
           send({ type: 'step', idx, status: 'waiting', org_name: r.org_name, agent_name: r.agent_name, queue_position: pos });
         });
+
+        // Human Gate: 인간 승인을 기다린 후 실행
+        if (r.gate_type === 'human') {
+          MissionJobs.setPendingGate(jobId);
+          steps[idx] = { ...steps[idx], status: 'gate_pending', queue_position: 0, job_id: jobId };
+          Missions.update(id, { steps: JSON.stringify(steps) });
+          send({ type: 'step', idx, status: 'gate_pending', org_name: r.org_name, agent_name: r.agent_name, job_id: jobId });
+          await waitForApproval(jobId);
+        }
 
         MissionJobs.start(jobId);
         if (vmTaskId) await vmPatch('/api/tasks', { id: vmTaskId, status: 'running' }, cookie);
@@ -154,6 +164,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   return new Response(stream, {
     headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
   });
+}
+
+// ── Human Gate 승인 대기 ──────────────────────────────────────────────
+async function waitForApproval(jobId: string) {
+  const MAX_WAIT = 30 * 60 * 1000; // 30분
+  const start = Date.now();
+  while (Date.now() - start < MAX_WAIT) {
+    const job = MissionJobs.get(jobId);
+    if (job?.gate_status === 'approved') return;
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  throw new Error('Human Gate 승인 대기 시간 초과 (30분)');
 }
 
 // ── 큐 대기 ────────────────────────────────────────────────────────────

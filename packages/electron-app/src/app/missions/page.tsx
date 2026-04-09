@@ -14,10 +14,11 @@ interface Routing {
 interface Step {
   org_name: string;
   agent_name: string;
-  status: 'pending' | 'queued' | 'waiting' | 'running' | 'done' | 'failed';
+  status: 'pending' | 'queued' | 'waiting' | 'running' | 'done' | 'failed' | 'gate_pending';
   queue_position?: number;
   output?: string;
   error?: string;
+  job_id?: string;
 }
 
 interface Mission {
@@ -209,16 +210,10 @@ export default function MissionsPage() {
     setLoading(false);
   };
 
-  // 미션 실행
-  const runMission = async (mission: Mission) => {
-    setView('running');
-    setCurrent(mission);
-    setSteps(mission.routing.map(r => ({ org_name: r.org_name, agent_name: r.agent_name, status: 'pending' })));
-    setFinalDoc('');
-    setErr('');
-
+  // SSE 스트림 처리 (run / resume 공통)
+  const handleSSEStream = async (missionId: string, endpoint: string) => {
     try {
-      const resp = await fetch(`/api/missions/${mission.id}/run`, { method: 'POST' });
+      const resp = await fetch(endpoint, { method: 'POST' });
       const reader = resp.body!.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -228,7 +223,6 @@ export default function MissionsPage() {
         if (done) break;
         buf += dec.decode(value, { stream: true });
 
-        // SSE 파싱
         const lines = buf.split('\n');
         buf = lines.pop() || '';
         for (const line of lines) {
@@ -239,10 +233,8 @@ export default function MissionsPage() {
               setSteps(ev.steps);
             } else if (ev.type === 'step') {
               setSteps(prev => prev.map((s, i) =>
-                i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error } : s
+                i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error, job_id: ev.job_id ?? s.job_id } : s
               ));
-            } else if (ev.type === 'consolidating') {
-              // 통합 중 표시
             } else if (ev.type === 'done') {
               setFinalDoc(ev.final_doc);
               setView('result');
@@ -255,6 +247,39 @@ export default function MissionsPage() {
       }
     } catch (e: any) {
       setErr(`실행 오류: ${e.message}`);
+    }
+  };
+
+  // 미션 실행
+  const runMission = async (mission: Mission) => {
+    setView('running');
+    setCurrent(mission);
+    setSteps(mission.routing.map(r => ({ org_name: r.org_name, agent_name: r.agent_name, status: 'pending' as const })));
+    setFinalDoc('');
+    setErr('');
+    await handleSSEStream(mission.id, `/api/missions/${mission.id}/run`);
+  };
+
+  // 미션 재개 (실패한 잡만 다시 실행)
+  const resumeMission = async (mission: Mission) => {
+    setView('running');
+    setCurrent(mission);
+    setFinalDoc('');
+    setErr('');
+    // 기존 step 상태 유지 (done 항목은 그대로 보여줌)
+    try {
+      const d = await fetch(`/api/missions/${mission.id}`).then(r => r.json());
+      if (d.ok) setSteps(d.mission.steps || []);
+    } catch {}
+    await handleSSEStream(mission.id, `/api/missions/${mission.id}/resume`);
+  };
+
+  // Human Gate 승인
+  const approveJob = async (missionId: string, jobId: string) => {
+    const res = await fetch(`/api/missions/${missionId}/jobs/${jobId}/approve`, { method: 'PATCH' });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setErr(d.error || '승인 실패');
     }
   };
 
@@ -290,12 +315,13 @@ export default function MissionsPage() {
   };
 
   const STEP_ICON: Record<string, string> = {
-    pending: '⏳',
-    queued:  '🕐',
-    waiting: '⏸',
-    running: '🔄',
-    done:    '✅',
-    failed:  '❌',
+    pending:      '⏳',
+    queued:       '🕐',
+    waiting:      '⏸',
+    running:      '🔄',
+    done:         '✅',
+    failed:       '❌',
+    gate_pending: '🔐',
   };
 
   return (
@@ -380,7 +406,7 @@ export default function MissionsPage() {
               }}
                 onMouseOver={e => e.currentTarget.style.borderColor = '#555'}
                 onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border)'}
-                onClick={() => m.status === 'done' ? viewMission(m) : m.status === 'pending' ? runMission(m) : undefined}
+                onClick={() => m.status === 'done' ? viewMission(m) : m.status === 'routed' ? runMission(m) : undefined}
               >
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{m.task}</div>
@@ -396,6 +422,12 @@ export default function MissionsPage() {
                 }}>
                   {STATUS_BADGE[m.status]?.label || m.status}
                 </span>
+                {m.status === 'failed' && (
+                  <button onClick={e => { e.stopPropagation(); resumeMission(m); }}
+                    style={{ background: 'none', border: '1px solid #f59e0b', color: '#f59e0b', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 4, fontFamily: 'inherit' }}
+                    title="실패한 잡만 이어서 실행"
+                  >↺ 재개</button>
+                )}
                 <button onClick={e => { e.stopPropagation(); deleteMission(m.id); }}
                   style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14 }}
                   onMouseOver={e => e.currentTarget.style.color = 'var(--danger)'}
@@ -717,20 +749,35 @@ export default function MissionsPage() {
                 <div key={i} style={{
                   border: '1px solid var(--border)', borderRadius: 6, padding: '12px 16px',
                   marginBottom: 8, background: 'var(--bg-elevated)',
-                  borderLeft: `3px solid ${s.status === 'done' ? 'var(--success)' : s.status === 'running' ? '#f59e0b' : s.status === 'failed' ? 'var(--danger)' : 'var(--border)'}`,
+                  borderLeft: `3px solid ${s.status === 'done' ? 'var(--success)' : s.status === 'running' ? '#f59e0b' : s.status === 'failed' ? 'var(--danger)' : s.status === 'gate_pending' ? '#f59e0b' : 'var(--border)'}`,
                   transition: 'border-color .3s',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span>{STEP_ICON[s.status]}</span>
+                    <span>{STEP_ICON[s.status] ?? '○'}</span>
                     <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{s.org_name}</span>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>({s.agent_name})</span>
                     <span style={{
                       marginLeft: 'auto', fontSize: 10, fontWeight: 600,
-                      color: s.status === 'done' ? 'var(--success)' : s.status === 'running' ? '#f59e0b' : s.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)',
+                      color: s.status === 'done' ? 'var(--success)' : s.status === 'running' ? '#f59e0b' : s.status === 'failed' ? 'var(--danger)' : s.status === 'gate_pending' ? '#f59e0b' : 'var(--text-muted)',
                     }}>
-                      {s.status === 'running' ? '작업 중...' : s.status === 'done' ? '완료' : s.status === 'failed' ? '실패' : '대기'}
+                      {s.status === 'running' ? '작업 중...' : s.status === 'done' ? '완료' : s.status === 'failed' ? '실패' : s.status === 'gate_pending' ? '승인 대기' : '대기'}
                     </span>
                   </div>
+                  {/* Human Gate 승인 버튼 */}
+                  {s.status === 'gate_pending' && s.job_id && current && (
+                    <div style={{ marginTop: 10, padding: '10px 12px', background: '#f59e0b18', border: '1px solid #f59e0b44', borderRadius: 4 }}>
+                      <div style={{ fontSize: 11, color: '#f59e0b', marginBottom: 8, fontWeight: 600 }}>
+                        🔐 Human Gate — 이 작업은 실행 전 담당자 승인이 필요합니다
+                      </div>
+                      <button
+                        onClick={() => approveJob(current.id, s.job_id!)}
+                        style={{
+                          fontSize: 11, fontWeight: 700, padding: '5px 16px', borderRadius: 4,
+                          background: '#f59e0b', border: 'none', color: '#000', cursor: 'pointer', fontFamily: 'inherit',
+                        }}
+                      >✓ 승인하여 실행</button>
+                    </div>
+                  )}
                   {s.output && (
                     <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-canvas)', borderRadius: 4, fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6, maxHeight: 100, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                       {s.output.slice(0, 500)}{s.output.length > 500 ? '...' : ''}

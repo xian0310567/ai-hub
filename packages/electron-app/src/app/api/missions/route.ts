@@ -270,7 +270,7 @@ ${task}
 반드시 아래 JSON 형식으로만 답변하세요:
 {
   "summary": "미션 요약 (1문장)",
-  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[]}],
+  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[],"gate_type":"auto"}],
   "needs_clarification": false,
   "clarification": null,
   "new_org_needed": [],
@@ -278,6 +278,11 @@ ${task}
   "cron_expr": null,
   "schedule_name": null
 }
+
+gate_type 판단 기준:
+- 기본값은 "auto" (자동 실행)
+- 외부 발송(이메일·슬랙·SNS 게시), 결제·환불, 데이터 삭제·초기화, 외부 API 쓰기 등 되돌리기 어려운 작업은 "human"으로 설정
+- "human"으로 설정된 잡은 에이전트 실행 전 담당자 승인이 필요함
 
 is_recurring 판단 기준:
 - 사용자 요청에 "매일", "매주", "매월", "정기적으로", "자동으로", "반복", "every", "daily", "weekly" 등의 반복 의도가 있으면 true

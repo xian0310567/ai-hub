@@ -63,4 +63,21 @@ test.describe('미션 (/missions)', () => {
     const r2 = await page.request.get('/api/chat/history/test-agent');
     expect(r2.status()).toBe(404);
   });
+
+  test('API: Human Gate approve — 없는 미션·잡 404', async ({ page }) => {
+    const res = await page.request.patch('/api/missions/nonexistent-id/jobs/nonexistent-job/approve');
+    expect(res.status()).toBe(404);
+  });
+
+  test('API: resume — 없는 미션 404', async ({ page }) => {
+    const res = await page.request.post('/api/missions/nonexistent-id/resume');
+    expect(res.status()).toBe(404);
+  });
+
+  test('미션 목록에 실패 미션 재개 버튼 존재', async ({ page }) => {
+    // 실패 미션이 있을 때만 테스트
+    const resumeBtn = page.getByRole('button', { name: /재개/ });
+    if (await resumeBtn.count() === 0) { test.skip(); return; }
+    await expect(resumeBtn.first()).toBeVisible({ timeout: 3_000 });
+  });
 });

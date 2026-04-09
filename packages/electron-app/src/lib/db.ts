@@ -66,6 +66,8 @@ db.exec(`
     org_name    TEXT NOT NULL DEFAULT '',
     subtask     TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'queued',
+    gate_type   TEXT NOT NULL DEFAULT 'auto',
+    gate_status TEXT NOT NULL DEFAULT 'approved',
     result      TEXT NOT NULL DEFAULT '',
     error       TEXT NOT NULL DEFAULT '',
     queued_at   INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -92,10 +94,12 @@ db.exec(`
 // 마이그레이션: 기존 DB에 신규 컬럼 추가 (이미 있으면 무시)
 try { db.exec("ALTER TABLE missions ADD COLUMN parent_mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL"); } catch {}
 try { db.exec("ALTER TABLE missions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"); } catch {}
+try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAULT 'auto'"); } catch {}
+try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 
 // 서버 재시작 시 stuck 잡 정리
 db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
-db.prepare("UPDATE mission_jobs SET status='failed' WHERE status='running'").run();
+db.prepare("UPDATE mission_jobs SET status='failed' WHERE status IN ('running','gate_pending')").run();
 
 export default db;
 
@@ -143,8 +147,9 @@ export const Missions = {
 };
 
 export const MissionJobs = {
-  create: (j: { id: string; mission_id: string; agent_id: string; agent_name: string; org_name: string; subtask: string }) =>
-    db.prepare('INSERT INTO mission_jobs(id,mission_id,agent_id,agent_name,org_name,subtask) VALUES(?,?,?,?,?,?)').run(j.id, j.mission_id, j.agent_id, j.agent_name, j.org_name, j.subtask),
+  create: (j: { id: string; mission_id: string; agent_id: string; agent_name: string; org_name: string; subtask: string; gate_type?: string }) =>
+    db.prepare('INSERT INTO mission_jobs(id,mission_id,agent_id,agent_name,org_name,subtask,gate_type) VALUES(?,?,?,?,?,?,?)')
+      .run(j.id, j.mission_id, j.agent_id, j.agent_name, j.org_name, j.subtask, j.gate_type ?? 'auto'),
   listByMission:   (missionId: string) => db.prepare('SELECT * FROM mission_jobs WHERE mission_id=? ORDER BY queued_at').all(missionId) as MissionJob[],
   queueForAgent:   (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status IN ('queued','running') ORDER BY queued_at").all(agentId) as MissionJob[],
   runningForAgent: (agentId: string) => db.prepare("SELECT * FROM mission_jobs WHERE agent_id=? AND status='running'").get(agentId) as MissionJob | undefined,
@@ -153,6 +158,8 @@ export const MissionJobs = {
   finish:          (id: string, result: string) => db.prepare("UPDATE mission_jobs SET status='done', result=?, finished_at=unixepoch() WHERE id=?").run(result, id),
   fail:            (id: string, error: string) => db.prepare("UPDATE mission_jobs SET status='failed', error=?, finished_at=unixepoch() WHERE id=?").run(error, id),
   get:             (id: string) => db.prepare('SELECT * FROM mission_jobs WHERE id=?').get(id) as MissionJob | undefined,
+  setPendingGate:  (id: string) => db.prepare("UPDATE mission_jobs SET status='gate_pending', gate_status='pending' WHERE id=?").run(id),
+  approve:         (id: string) => db.prepare("UPDATE mission_jobs SET gate_status='approved' WHERE id=?").run(id),
 };
 
 export const MissionSchedules = {
@@ -188,6 +195,7 @@ export interface Mission {
 export interface MissionJob {
   id: string; mission_id: string; agent_id: string; agent_name: string;
   org_name: string; subtask: string; status: string;
+  gate_type: string; gate_status: string;
   result: string; error: string;
   queued_at?: number; started_at?: number; finished_at?: number;
 }

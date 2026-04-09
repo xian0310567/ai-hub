@@ -262,35 +262,33 @@ export default function OrgPage() {
 
   return (
     <div className="org-page" style={{pointerEvents: harnessLoading ? 'none' : 'auto'}}>
-      {/* 헤더 */}
-      <div className="org-page-hdr">
-        <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-muted)',textDecoration:'none',transition:'color .12s'}} onMouseOver={e=>e.currentTarget.style.color='var(--text-primary)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>← 대시보드</a>
-        <span style={{color:'var(--border)'}}>|</span>
-        <span style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>조직 관리</span>
-        <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-          <button
-            onClick={async () => {
-              if (window.confirm('로그아웃하시겠습니까?')) {
-                try {
-                  await fetch('/api/auth/signout', { method: 'POST' });
-                  router.push('/login');
-                } catch (e) {
-                  alert('로그아웃 실패');
-                }
-              }
-            }}
-            style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',border:'1px solid var(--border)',padding:'5px 14px',borderRadius:4,cursor:'pointer',background:'transparent',fontFamily:'inherit',transition:'all .12s'}}
-            onMouseOver={e=>{e.currentTarget.style.color='var(--danger)';e.currentTarget.style.borderColor='var(--danger)';}}
-            onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}
-          >
-            로그아웃
-          </button>
+      {/* 네비게이션 */}
+      <nav>
+        <div className="nav-title">AI 사업부</div>
+        <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>대시보드</a>
+        <a href="/missions" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>미션</a>
+        <a href="/schedules" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>스케줄</a>
+        <span style={{fontSize:12,fontWeight:500,color:'var(--accent)',padding:'4px 10px',border:'1px solid var(--accent-dim)',borderRadius:4}}>조직 관리</span>
+        <button
+          onClick={async () => {
+            if (window.confirm('로그아웃하시겠습니까?')) {
+              try { await fetch('/api/auth/signout', { method: 'POST' }); router.push('/login'); }
+              catch { alert('로그아웃 실패'); }
+            }
+          }}
+          style={{marginLeft:'auto',fontSize:12,fontWeight:500,color:'var(--text-secondary)',border:'1px solid var(--border)',padding:'4px 10px',borderRadius:4,cursor:'pointer',background:'transparent',fontFamily:'inherit',transition:'all .12s'}}
+          onMouseOver={e=>{e.currentTarget.style.color='var(--danger)';e.currentTarget.style.borderColor='var(--danger)';}}
+          onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}
+        >로그아웃</button>
+      </nav>
+
+      <div style={{padding:'24px 32px',maxWidth:900}}>
+
+        {/* 조직 관리 액션 버튼 */}
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
           <button className="nav-btn purple" onClick={()=>openForm('division')}>+ 부문</button>
           <button className="nav-btn" style={{color:'var(--accent)',borderColor:'var(--accent-dim)'}} onClick={()=>openForm('department')}>+ 실</button>
         </div>
-      </div>
-
-      <div style={{padding:'24px 32px',maxWidth:900}}>
 
         {/* 통계 카드 */}
         <div style={{display:'flex',gap:12,marginBottom:28}}>

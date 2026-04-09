@@ -273,6 +273,7 @@ export default function MissionsPage() {
   };
 
   const deleteMission = async (id: string) => {
+    if (!confirm('이 미션을 삭제할까요?')) return;
     await fetch(`/api/missions?id=${id}`, { method: 'DELETE' });
     reload();
   };

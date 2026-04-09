@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn } from 'child_process';
-import { CLAUDE_CLI } from '@/lib/claude-cli';
+import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
 import { getSession, getUserClaudeConfigDir } from '@/lib/auth';
 import fs from 'fs';
 
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
       });
 
       proc.on('error', (e) => {
-        send(`data: ${JSON.stringify({ type: 'error', text: e.message })}\n\n`);
+        send(`data: ${JSON.stringify({ type: 'error', text: claudeSpawnError(e) })}\n\n`);
         try { controller.close(); } catch {}
       });
 

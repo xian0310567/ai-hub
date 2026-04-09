@@ -74,3 +74,13 @@ function resolve(): string {
 }
 
 export const CLAUDE_CLI = resolve();
+
+/** spawn/execFile ENOENT 에러를 사용자 친화적 메시지로 변환 */
+export function claudeSpawnError(e: any): string {
+  if (e?.code === 'ENOENT' || (e?.message && e.message.includes('ENOENT'))) {
+    return `Claude CLI를 찾을 수 없습니다 (경로: ${CLAUDE_CLI}). `
+      + '해결 방법: npm i -g @anthropic-ai/claude-code 로 설치하거나, '
+      + 'CLAUDE_CLI_PATH 환경변수에 claude 바이너리 경로를 지정하세요.';
+  }
+  return e?.message || String(e);
+}

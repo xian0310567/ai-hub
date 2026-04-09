@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { Missions, Notifications, MissionSchedules } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
-import { CLAUDE_CLI } from '@/lib/claude-cli';
+import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
 import cronParser from 'cron-parser';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
@@ -192,7 +192,7 @@ export async function POST(req: NextRequest) {
   setImmediate(() => {
     execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: { ...process.env } },
       (err, stdout) => {
-        if (err) { Missions.update(id, { status: 'routing_failed' }); return; }
+        if (err) { Missions.update(id, { status: 'routing_failed', result: claudeSpawnError(err) }); return; }
         try {
           // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
           let parsed: any;

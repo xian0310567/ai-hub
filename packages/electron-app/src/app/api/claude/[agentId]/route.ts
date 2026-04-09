@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn, execSync } from 'child_process';
-import { CLAUDE_CLI } from '@/lib/claude-cli';
+import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
 import { ChatLogs } from '@/lib/db';
 import { randomUUID } from 'crypto';
 import { getSession, getVmSessionCookie, getUserSessionsDir } from '@/lib/auth';
@@ -126,9 +126,7 @@ function runClaude(
 
       proc.on('error', (e) => {
         controller.enqueue(encoder.encode(
-          `[claude CLI 오류: ${e.message}]\n\n` +
-          `claude가 설치되어 있지 않거나 로그인이 필요합니다.\n` +
-          `터미널에서 'claude login'을 실행해주세요.`
+          `[claude CLI 오류] ${claudeSpawnError(e)}`
         ));
         try { controller.close(); } catch {}
       });

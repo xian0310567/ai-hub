@@ -1,19 +1,9 @@
 import { NextRequest } from 'next/server';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
-import { CLAUDE_CLI } from '@/lib/claude-cli';
+import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-
-/** execFileSync ENOENT 에러를 사용자 친화적 메시지로 변환 */
-function friendlyError(e: any): string {
-  if (e?.code === 'ENOENT' || (e?.message && e.message.includes('ENOENT'))) {
-    return `Claude CLI를 찾을 수 없습니다 (경로: ${CLAUDE_CLI}). `
-      + '해결 방법: npm i -g @anthropic-ai/claude-code 로 설치하거나, '
-      + 'CLAUDE_CLI_PATH 환경변수에 claude 바이너리 경로를 지정하세요.';
-  }
-  return e?.message || String(e);
-}
 
 const VM_URL = process.env.VM_SERVER_URL || 'http://localhost:4000';
 
@@ -183,7 +173,7 @@ ${task}
       const design = JSON.parse(cleaned);
       return Response.json({ ok: true, design, mode: 'leader' });
     } catch (e: any) {
-      return Response.json({ ok: false, error: `설계 실패: ${friendlyError(e)}` }, { status: 500 });
+      return Response.json({ ok: false, error: `설계 실패: ${claudeSpawnError(e)}` }, { status: 500 });
     }
   }
 
@@ -235,7 +225,7 @@ ${task}
     const design = JSON.parse(cleaned);
     return Response.json({ ok: true, design, mode: 'team' });
   } catch (e: any) {
-    return Response.json({ ok: false, error: `설계 실패: ${friendlyError(e)}` }, { status: 500 });
+    return Response.json({ ok: false, error: `설계 실패: ${claudeSpawnError(e)}` }, { status: 500 });
   }
 }
 

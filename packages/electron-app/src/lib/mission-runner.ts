@@ -124,6 +124,19 @@ async function getWsPath(agent: any, cookie = ''): Promise<string> {
   return wsPath;
 }
 
+function buildMissionBoard(missionId: string, task: string, routingEntries: RoutingEntry[]): string {
+  const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+  const boardsDir = path.join(dataDir, 'boards');
+  fs.mkdirSync(boardsDir, { recursive: true });
+  const boardPath = path.join(boardsDir, `mission-${missionId}.md`);
+  const plan = routingEntries.map((r, i) =>
+    `| ${i + 1} | ${r.org_name} | ${r.agent_name} | ${r.subtask.replace(/\n+/g, ' ').slice(0, 100)} |`
+  ).join('\n');
+  const content = `# 미션 협업 보드\n\n## 미션 목표\n${task}\n\n## 전체 실행 계획\n| # | 조직 | 에이전트 | 담당 업무 요약 |\n|---|------|---------|---------------|\n${plan}\n\n---\n> 이 보드는 모든 에이전트가 공유하는 소통 공간입니다.\n> 작업 시작 시 이 파일을 읽고, 완료 후 아래에 결과를 기록해 주세요.\n\n## 에이전트 소통 기록\n\n`;
+  fs.writeFileSync(boardPath, content, 'utf8');
+  return boardPath;
+}
+
 export async function runMissionBackground(missionId: string, sessionCookie = ''): Promise<void> {
   const mission = Missions.get(missionId);
   if (!mission) throw new Error('미션 없음');
@@ -135,6 +148,9 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
   const vaultEnv = await collectVaultEnv(mission.user_id, sessionCookie);
   if (Object.keys(vaultEnv).length > 0)
     console.log(`[mission-runner] vault 시크릿 ${Object.keys(vaultEnv).length}개 로드됨`);
+
+  // 협업 보드 생성
+  const boardPath = buildMissionBoard(missionId, mission.task, routing);
 
   // 잡 생성
   const jobIds: string[] = [];
@@ -166,9 +182,13 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
       const agent = await vmGet(`/api/agents/${r.agent_id}`, sessionCookie);
       const wsPath = await getWsPath(agent, sessionCookie);
       const modelArgs = agent?.model ? ['--model', agent.model] : [];
+      const routingCtx = routing.length > 1
+        ? `\n## 전체 실행 계획\n이 미션은 다음 조직들이 동시에 진행합니다:\n${routing.map((re, i) => `  ${i + 1}. [${re.org_name}] ${re.agent_name}: ${re.subtask.split('\n')[0].slice(0, 100)}`).join('\n')}\n\n당신의 역할: **${r.org_name} (${r.agent_name})**\n`
+        : '';
+      const boardCtx = `\n## 협업 보드\n모든 에이전트가 공유하는 소통 공간: ${boardPath}\n\n1. 작업 시작 전 보드를 읽어 다른 에이전트의 진행 상황을 파악하세요\n2. 의존성, 이슈, 중요 발견 사항을 보드에 기록하세요\n3. 작업 완료 후 보드 하단에 다음 형식으로 결과를 추가하세요:\n\n### ${r.org_name} (${r.agent_name}) 완료 보고\n[수행한 작업 요약]\n`;
       const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션
 전체 미션: ${mission.task}
-
+${routingCtx}${boardCtx}
 ## 배정된 업무
 ${r.subtask}
 

@@ -119,6 +119,22 @@ async function waitForTurn(agentId: string, jobId: string, onWait: (pos: number)
   throw new Error('큐 대기 시간 초과 (10분)');
 }
 
+// ── 협업 보드 생성/재사용 ──────────────────────────────────────────────
+function ensureMissionBoard(missionId: string, task: string, routingEntries: RoutingEntry[]): string {
+  const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+  const boardsDir = path.join(dataDir, 'boards');
+  fs.mkdirSync(boardsDir, { recursive: true });
+  const boardPath = path.join(boardsDir, `mission-${missionId}.md`);
+  if (!fs.existsSync(boardPath)) {
+    const plan = routingEntries.map((r, i) =>
+      `| ${i + 1} | ${r.org_name} | ${r.agent_name} | ${r.subtask.replace(/\n+/g, ' ').slice(0, 100)} |`
+    ).join('\n');
+    const content = `# 미션 협업 보드\n\n## 미션 목표\n${task}\n\n## 전체 실행 계획\n| # | 조직 | 에이전트 | 담당 업무 요약 |\n|---|------|---------|---------------|\n${plan}\n\n---\n> 이 보드는 모든 에이전트가 공유하는 소통 공간입니다.\n> 작업 시작 시 이 파일을 읽고, 완료 후 아래에 결과를 기록해 주세요.\n\n## 에이전트 소통 기록\n\n`;
+    fs.writeFileSync(boardPath, content, 'utf8');
+  }
+  return boardPath;
+}
+
 // ── MCP 설정 파일 생성 ─────────────────────────────────────────────────
 async function buildMcpConfigFile(userId: string, missionId: string): Promise<string | null> {
   try {
@@ -234,18 +250,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       send({ type: 'start', steps });
 
+      // 협업 보드 생성/재사용 + 실시간 폴링
+      const boardPath = ensureMissionBoard(id, mission.task, routing);
+      let boardPollStopped = false;
+      let lastBoardContent = '';
+      (async () => {
+        while (!boardPollStopped) {
+          await new Promise(res => setTimeout(res, 4000));
+          try {
+            const content = fs.readFileSync(boardPath, 'utf8');
+            if (content !== lastBoardContent) { lastBoardContent = content; send({ type: 'board_update', content }); }
+          } catch {}
+        }
+      })();
+
       const results: { org_name: string; agent_name: string; output: string }[] = [];
 
       // 기존 done 잡 결과 수집
-      existingJobs.forEach((job, i) => {
-        if (job.status === 'done') results.push({ org_name: routing[i]?.org_name ?? '', agent_name: routing[i]?.agent_name ?? '', output: job.result });
-      });
+      for (const re of routing) {
+        const key = `${re.agent_id}::${re.subtask}`;
+        const doneJob = latestDoneByKey.get(key);
+        if (doneJob) results.push({ org_name: re.org_name, agent_name: re.agent_name, output: doneJob.result });
+      }
 
       await Promise.allSettled(resumeRouting.map(async (r, resumeIdx) => {
         const jobId = newJobIds[resumeIdx];
         const vmTaskId = vmTaskIds[resumeIdx];
         // 전체 routing에서 이 항목의 원래 idx 찾기
-        const idx = routing.findIndex((orig, i) => orig.agent_id === r.agent_id && orig.subtask === r.subtask && existingJobs[i]?.status !== 'done');
+        const idx = routing.findIndex(orig => orig.agent_id === r.agent_id && orig.subtask === r.subtask);
 
         await waitForTurn(r.agent_id, jobId, (pos) => {
           steps[idx] = { ...steps[idx], status: 'waiting', queue_position: pos };
@@ -293,9 +325,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           }
           const modelArgs = agent?.model ? ['--model', agent.model] : [];
           const mcpArgs = mcpConfigPath ? ['--mcp-config', mcpConfigPath] : [];
+
+          const routingCtx = routing.length > 1
+            ? `\n## 전체 실행 계획\n이 미션은 다음 조직들이 진행합니다:\n${routing.map((re, i) => `  ${i + 1}. [${re.org_name}] ${re.agent_name}: ${re.subtask.split('\n')[0].slice(0, 100)}`).join('\n')}\n\n당신의 역할: **${r.org_name} (${r.agent_name})**\n`
+            : '';
+          const boardCtx = `\n## 협업 보드\n모든 에이전트가 공유하는 소통 공간: ${boardPath}\n\n1. 작업 시작 전 보드를 읽어 이전 실행 결과 및 다른 에이전트 상황을 파악하세요\n2. 작업 완료 후 보드 하단에 다음 형식으로 결과를 추가하세요:\n\n### ${r.org_name} (${r.agent_name}) 완료 보고 (재개)\n[수행한 작업 요약]\n`;
+
           const prompt = `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션 (재개)
 전체 미션: ${mission.task}
-
+${routingCtx}${boardCtx}
 ## 배정된 업무
 ${r.subtask}
 
@@ -329,6 +367,7 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
           results.push({ org_name: r.org_name, agent_name: r.agent_name, output: `[실패: ${msg}]` });
         }
       }));
+      boardPollStopped = true;
 
       send({ type: 'consolidating' });
       try {

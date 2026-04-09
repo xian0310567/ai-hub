@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth';
+import { CLAUDE_CLI } from '@/lib/claude-cli';
 
 // GET /api/auth — claude 연결 상태 확인
 export async function GET(req: NextRequest) {
@@ -9,8 +10,8 @@ export async function GET(req: NextRequest) {
 
   let loggedIn = false;
   try {
-    execSync('claude --version', { stdio: 'ignore', timeout: 3000 });
-    execSync('claude -p "1+1=" --output-format text', {
+    execSync(`${CLAUDE_CLI} --version`, { stdio: 'ignore', timeout: 3000 });
+    execSync(`${CLAUDE_CLI} -p "1+1=" --output-format text`, {
       timeout: 15000,
       stdio: 'pipe',
       env: { ...process.env },

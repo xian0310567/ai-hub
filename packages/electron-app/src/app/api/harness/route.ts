@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import { CLAUDE_CLI } from '@/lib/claude-cli';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -165,7 +166,7 @@ ${task}
 - 한국어로 작성`;
 
     try {
-      const result = execFileSync('claude', ['-p', prompt], {
+      const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
         cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
       });
       const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -217,7 +218,7 @@ ${task}
 - 한국어 이름 사용`;
 
   try {
-    const result = execFileSync('claude', ['-p', prompt], {
+    const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
       cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
     });
     const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -342,7 +343,7 @@ export async function PATCH(req: NextRequest) {
 ${soul}
 
 개선된 SOUL.md만 출력 (## 정체성, ## 핵심 역할, ## 업무 처리 원칙, ## 협업 방식, ## 보고 형식 섹션 포함):`;
-          const improved = execFileSync('claude', ['-p', improvePrompt], {
+          const improved = execFileSync(CLAUDE_CLI, ['-p', improvePrompt], {
             cwd: wsPath, encoding: 'utf8', timeout: 60000, env: { ...process.env },
           }).trim();
           if (improved && improved.length > 50) {

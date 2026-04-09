@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { Missions, Notifications, MissionSchedules } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import { CLAUDE_CLI } from '@/lib/claude-cli';
 import cronParser from 'cron-parser';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
@@ -189,7 +190,7 @@ export async function POST(req: NextRequest) {
   if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
 
   setImmediate(() => {
-    execFile('claude', promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: { ...process.env } },
+    execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: { ...process.env } },
       (err, stdout) => {
         if (err) { Missions.update(id, { status: 'routing_failed' }); return; }
         try {

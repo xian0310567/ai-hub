@@ -8,6 +8,7 @@ import { Missions, MissionJobs, McpServerConfigs } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
 import { readAllPersonalSecrets } from '@/lib/personal-vault';
 import { scoreJob } from '@/lib/quality-scorer';
+import { CLAUDE_CLI } from '@/lib/claude-cli';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -85,7 +86,7 @@ async function callClaude(prompt: string, cwd: string, modelArgs: string[] = [],
   for (let i = 0; i < 2; i++) {
     try {
       const { stdout } = await execFileAsync(
-        'claude',
+        CLAUDE_CLI,
         ['-p', prompt, '--allowedTools', 'Edit,Write,Read,Bash', '--dangerously-skip-permissions', ...modelArgs, ...imagePaths],
         { cwd, encoding: 'utf8', timeout: 300_000, env: { ...process.env, ...extraEnv }, maxBuffer: 10 * 1024 * 1024 },
       );

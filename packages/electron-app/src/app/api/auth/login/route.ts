@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn } from 'child_process';
+import { CLAUDE_CLI } from '@/lib/claude-cli';
 import { getSession, getUserClaudeConfigDir } from '@/lib/auth';
 import fs from 'fs';
 
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
             stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir },
           })
-        : spawn('claude', ['login'], {
+        : spawn(CLAUDE_CLI, ['login'], {
             stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir },
           });

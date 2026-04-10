@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { drawSprite } from '@/lib/sprites';
+import OpenClawStatus from '@/components/OpenClawStatus';
 
 // ── Types ───────────────────────────────────────────────────────────
 interface Agent { id:string; name:string; emoji:string; color:string; command_name:string|null; is_lead:number; org_level:string; harness_pattern:string; model:string; soul:string; }
@@ -857,6 +858,9 @@ export default function Dashboard() {
         </div>
       )}
 
+
+      {/* ── OpenClaw 상태 위젯 ── */}
+      <OpenClawStatus />
 
       {loginModal && <LoginModal onClose={()=>setLoginModal(false)} onDone={()=>{setLoginModal(false);fetch('/api/auth').then(r=>r.json()).then(d=>setAuthStatus({loggedIn:d.loggedIn}));}} />}
     </>

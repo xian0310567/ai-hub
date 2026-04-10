@@ -1,0 +1,161 @@
+{
+  // ai-hub OpenClaw Gateway 설정
+  // 이 파일은 ~/.openclaw/openclaw.json 에 심볼릭 링크하거나 복사해서 사용합니다.
+  // OPENCLAW_CONFIG_PATH 환경변수로 직접 경로를 지정할 수도 있습니다.
+
+  // 에이전트 설정
+  "agents": {
+    "defaults": {
+      "workspace": "./openclaw-workspaces/orchestrator",
+      "model": {
+        "primary": "claude-cli/claude-sonnet-4-6"
+      },
+      "thinkingDefault": "low",
+      "timeoutSeconds": 300
+    },
+    "list": [
+      {
+        "id": "orchestrator",
+        "default": true,
+        "name": "오케스트레이터",
+        "workspace": "./openclaw-workspaces/orchestrator",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "medium",
+        "subagents": {
+          "allowAgents": [
+            "dev-team",
+            "sns-marketing-team",
+            "devops-team",
+            "qa-team",
+            "internal-dev-team",
+            "biz-ops-team",
+            "external-dev-team",
+            "content-team"
+          ]
+        }
+      },
+      {
+        "id": "dev-team",
+        "name": "개발실",
+        "workspace": "./openclaw-workspaces/dev-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "sns-marketing-team",
+        "name": "SNS 마케팅실",
+        "workspace": "./openclaw-workspaces/sns-marketing-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "devops-team",
+        "name": "DevOps실",
+        "workspace": "./openclaw-workspaces/devops-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "qa-team",
+        "name": "QA실",
+        "workspace": "./openclaw-workspaces/qa-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "internal-dev-team",
+        "name": "사내서비스 개발실",
+        "workspace": "./openclaw-workspaces/internal-dev-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "biz-ops-team",
+        "name": "사업 운영실",
+        "workspace": "./openclaw-workspaces/biz-ops-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "external-dev-team",
+        "name": "외부 서비스 개발실",
+        "workspace": "./openclaw-workspaces/external-dev-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      },
+      {
+        "id": "content-team",
+        "name": "컨텐츠 제작실",
+        "workspace": "./openclaw-workspaces/content-team",
+        "model": {
+          "primary": "claude-cli/claude-sonnet-4-6"
+        },
+        "thinkingDefault": "low"
+      }
+    ]
+  },
+
+  // 바인딩: 외부 채널 메시지를 오케스트레이터로 라우팅
+  "bindings": [
+    {
+      "agentId": "orchestrator",
+      "comment": "모든 Telegram DM → 오케스트레이터",
+      "match": {
+        "channel": "telegram"
+      }
+    },
+    {
+      "agentId": "orchestrator",
+      "comment": "웹챗 → 오케스트레이터",
+      "match": {
+        "channel": "webchat"
+      }
+    }
+  ],
+
+  // 채널 설정 (Telegram은 나중에 봇 토큰을 넣으면 활성화)
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "YOUR_TELEGRAM_BOT_TOKEN",
+      "allowFrom": []
+    }
+  },
+
+  // 게이트웨이 설정
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback"
+  },
+
+  // 세션 설정
+  "session": {
+    "scope": "per-sender",
+    "reset": {
+      "mode": "idle",
+      "idleMinutes": 60
+    }
+  },
+
+  // 로깅
+  "logging": {
+    "level": "info"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "description": "기존 ai-hub 팀 디렉터리 ↔ OpenClaw 워크스페이스 매핑",
+  "mappings": {
+    "개발실": {
+      "openclawId": "dev-team",
+      "workspace": "./openclaw-workspaces/dev-team",
+      "name": "개발실"
+    },
+    "sns-마케팅실": {
+      "openclawId": "sns-marketing-team",
+      "workspace": "./openclaw-workspaces/sns-marketing-team",
+      "name": "SNS 마케팅실"
+    },
+    "devops실": {
+      "openclawId": "devops-team",
+      "workspace": "./openclaw-workspaces/devops-team",
+      "name": "DevOps실"
+    },
+    "qa실": {
+      "openclawId": "qa-team",
+      "workspace": "./openclaw-workspaces/qa-team",
+      "name": "QA실"
+    },
+    "사내서비스-개발실": {
+      "openclawId": "internal-dev-team",
+      "workspace": "./openclaw-workspaces/internal-dev-team",
+      "name": "사내서비스 개발실"
+    },
+    "사업-운영실": {
+      "openclawId": "biz-ops-team",
+      "workspace": "./openclaw-workspaces/biz-ops-team",
+      "name": "사업 운영실"
+    },
+    "외부-서비스-개발실": {
+      "openclawId": "external-dev-team",
+      "workspace": "./openclaw-workspaces/external-dev-team",
+      "name": "외부 서비스 개발실"
+    },
+    "컨텐츠-제작실": {
+      "openclawId": "content-team",
+      "workspace": "./openclaw-workspaces/content-team",
+      "name": "컨텐츠 제작실"
+    }
+  }
+}

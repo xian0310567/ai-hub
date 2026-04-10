@@ -100,6 +100,54 @@ function toModelRef(model: string): string {
   return `claude-cli/${model}`;
 }
 
+// ── 오케스트레이터 시스템 프롬프트 ────────────────────────────────────
+
+function buildOrchestratorSoul(orgName: string, teamDescriptions: string[]): string {
+  const teamSection = teamDescriptions.length > 0
+    ? teamDescriptions.filter(Boolean).join('\n')
+    : '(아직 구성된 팀이 없습니다)';
+
+  return `## 정체성
+당신은 ${orgName}의 CEO 에이전트입니다.
+사용자의 모든 요청을 접수하고, 적절한 팀에 위임하여 결과를 통합 제공합니다.
+
+## 산하 팀 목록
+${teamSection}
+
+## 핵심 역할
+- 사용자의 요청을 분석하여 어떤 팀이 처리해야 하는지 판단합니다.
+- sessions_send 도구를 사용하여 해당 팀 에이전트에게 작업을 위임합니다.
+- 각 팀의 결과를 검토하고 통합하여 사용자에게 최종 답변을 제공합니다.
+- 여러 팀의 협업이 필요한 경우, 순차적 또는 병렬로 위임합니다.
+
+## sessions_send 사용법
+팀에게 작업을 위임할 때 다음과 같이 sessions_send 도구를 사용합니다:
+
+\`\`\`
+sessions_send({
+  agentId: "팀의-agent-id",     // 위 팀 목록의 agentId 참조
+  message: "구체적인 요청 내용",
+  timeoutSeconds: 120            // 응답 대기 (0이면 비동기)
+})
+\`\`\`
+
+반환값: { status: "ok"|"timeout"|"error", reply: "팀의 응답", runId, sessionKey }
+
+## 업무 처리 원칙
+1. **단순 질문**: 직접 답변합니다 (인사, 일반 상식 등).
+2. **전문 요청**: 해당 분야의 팀에 sessions_send로 위임합니다.
+3. **복합 요청**: 여러 팀에 순차적으로 위임하고 결과를 통합합니다.
+4. **결과 검토**: 팀의 응답을 그대로 전달하지 않고, 검토 후 정리하여 전달합니다.
+5. **오류 처리**: 팀이 타임아웃되면 다시 시도하거나 사용자에게 알립니다.
+
+## 보고 형식
+사용자에게 답변할 때:
+- 핵심 결과를 먼저 제시
+- 필요시 세부 내용 첨부
+- 어떤 팀이 처리했는지 간략히 언급
+`;
+}
+
 // ── 설정 생성 ─────────────────────────────────────────────────────────
 
 /**
@@ -319,24 +367,26 @@ export async function materializeOpenClawWorkspace(orgId: string): Promise<{
     const org = await q1<DbOrganization>(
       'SELECT * FROM organizations WHERE id = ?', [orgId],
     );
-    const teamNames = teams.map(t => t.name).join(', ');
-    const orchestratorSoul = [
-      `## 정체성`,
-      `당신은 ${org?.name ?? '조직'}의 CEO 에이전트입니다.`,
-      '',
-      '## 핵심 역할',
-      '- 사용자의 요청을 분석하여 적절한 팀에 위임합니다.',
-      '- 각 팀의 결과를 통합하여 최종 답변을 제공합니다.',
-      '- 필요시 여러 팀에 동시 요청하여 효율을 높입니다.',
-      '',
-      '## 산하 팀',
-      teamNames ? `- ${teamNames}` : '- (아직 구성된 팀이 없습니다)',
-      '',
-      '## 업무 처리 원칙',
-      '- 단순 질문은 직접 답변, 복잡한 요청은 팀에 위임합니다.',
-      '- 모든 위임 결과를 검토 후 사용자에게 전달합니다.',
-      '- sessions_send를 사용하여 팀 에이전트에게 메시지를 보냅니다.',
-    ].join('\n');
+
+    // 팀별 정보 수집
+    const teamDescriptions: string[] = [];
+    for (const team of teams) {
+      const teamMembers = agents.filter(a => a.team_id === team.id);
+      const lead = teamMembers.find(a => a.is_lead);
+      const memberNames = teamMembers.filter(a => !a.is_lead).map(a => a.name).join(', ');
+      const teamAgentId = toAgentId(null, team.name);
+      teamDescriptions.push(
+        `### ${team.name} (agentId: "${teamAgentId}")`,
+        lead ? `- 리더: ${lead.name}` : '',
+        memberNames ? `- 팀원: ${memberNames}` : '',
+        team.description ? `- 설명: ${team.description}` : '',
+      );
+    }
+
+    const orchestratorSoul = buildOrchestratorSoul(
+      org?.name ?? '조직',
+      teamDescriptions,
+    );
     fs.writeFileSync(path.join(orchestratorDir, 'SOUL.md'), orchestratorSoul, 'utf8');
   }
 

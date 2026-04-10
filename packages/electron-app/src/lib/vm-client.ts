@@ -144,6 +144,20 @@ export const vmTasks = {
 };
 
 // ─────────────────────────────────────────────────────
+// OpenClaw
+// ─────────────────────────────────────────────────────
+export const vmOpenClaw = {
+  /** 현재 조직의 OpenClaw 설정 실시간 생성 */
+  config: (cookie: string) => vmFetch('/api/openclaw/config', { cookie }),
+  /** 마지막 materialize된 설정 조회 */
+  stored: (cookie: string) => vmFetch('/api/openclaw/stored', { cookie }),
+  /** DB → OpenClaw 파일 동기화 실행 */
+  sync:   (cookie: string) => vmFetch('/api/openclaw/sync', { method: 'POST', cookie }),
+  /** 워크스페이스 상태 확인 */
+  status: (cookie: string) => vmFetch('/api/openclaw/status', { cookie }),
+};
+
+// ─────────────────────────────────────────────────────
 // Vaults
 // ─────────────────────────────────────────────────────
 export const vmVaults = {

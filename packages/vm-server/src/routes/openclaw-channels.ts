@@ -60,11 +60,20 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: '이미 등록된 채널입니다. PATCH로 수정하세요.' });
     }
 
+    // config round-trip 검증
+    let configStr: string;
+    try {
+      configStr = JSON.stringify(config ?? {});
+      JSON.parse(configStr); // round-trip 확인
+    } catch {
+      return reply.code(400).send({ error: 'config가 유효한 JSON이 아닙니다' });
+    }
+
     const id = newId();
     await exec(
       `INSERT INTO openclaw_channels(id, org_id, channel_type, config, enabled)
        VALUES(?, ?, ?, ?, ?)`,
-      [id, user.orgId, channel_type, JSON.stringify(config ?? {}), enabled ?? true],
+      [id, user.orgId, channel_type, configStr, enabled ?? true],
     );
 
     return reply.code(201).send(
@@ -100,7 +109,7 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
       await exec('UPDATE openclaw_channels SET enabled = ? WHERE id = ?', [enabled, id]);
     }
 
-    return q1('SELECT * FROM openclaw_channels WHERE id = ?', [id]);
+    return q1('SELECT * FROM openclaw_channels WHERE id = ? AND org_id = ?', [id, user.orgId]);
   });
 
   /**
@@ -113,6 +122,10 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
 
     const { id } = req.body as { id: string };
     await exec('DELETE FROM openclaw_channels WHERE id = ? AND org_id = ?', [id, user.orgId]);
+
+    // stored config 무효화 (다음 조회 시 재생성 유도)
+    await exec('DELETE FROM openclaw_configs WHERE org_id = ?', [user.orgId]);
+
     return { ok: true };
   });
 }

@@ -36,6 +36,9 @@ db.exec(`
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  CREATE INDEX IF NOT EXISTS idx_chat_logs_user_session
+    ON chat_logs(user_id, agent_id, session_key);
+
   -- 개인 알림
   CREATE TABLE IF NOT EXISTS notifications (
     id         TEXT PRIMARY KEY,

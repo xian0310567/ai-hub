@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
         role: m.role,
         content: m.content,
         session_key: sessionKey,
+        created_at: Math.floor(Date.now() / 1000) - (gatewayMessages.length - i),
       })),
     });
   }

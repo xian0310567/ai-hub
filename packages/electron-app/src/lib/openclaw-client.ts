@@ -73,14 +73,18 @@ export function sendToGateway(options: OpenClawSendOptions): ReadableStream<Uint
 
   return new ReadableStream({
     async start(controller) {
+      let closed = false;
+      const safeClose = () => { if (!closed) { closed = true; controller.close(); } };
+      const safeEnqueue = (chunk: Uint8Array) => { if (!closed) controller.enqueue(chunk); };
+
       const abortCtrl = new AbortController();
       const timeout = setTimeout(() => {
         abortCtrl.abort();
-        try {
-          controller.enqueue(encoder.encode('\n[타임아웃]'));
-          controller.close();
-        } catch {}
+        safeEnqueue(encoder.encode('\n[타임아웃]'));
+        safeClose();
       }, timeoutMs);
+
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
       try {
         const messages: OpenClawMessage[] = [
@@ -111,8 +115,8 @@ export function sendToGateway(options: OpenClawSendOptions): ReadableStream<Uint
 
         if (!res.ok) {
           const errBody = await res.text().catch(() => res.statusText);
-          controller.enqueue(encoder.encode(`[Gateway 오류 ${res.status}] ${errBody}`));
-          controller.close();
+          safeEnqueue(encoder.encode(`[Gateway 오류 ${res.status}] ${errBody}`));
+          safeClose();
           clearTimeout(timeout);
           return;
         }
@@ -123,14 +127,14 @@ export function sendToGateway(options: OpenClawSendOptions): ReadableStream<Uint
             choices?: Array<{ message?: { content?: string } }>;
           };
           const text = data.choices?.[0]?.message?.content ?? '';
-          controller.enqueue(encoder.encode(text));
-          controller.close();
+          safeEnqueue(encoder.encode(text));
+          safeClose();
           clearTimeout(timeout);
           return;
         }
 
         // SSE 스트리밍 파싱
-        const reader = res.body.getReader();
+        reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
 
@@ -157,7 +161,7 @@ export function sendToGateway(options: OpenClawSendOptions): ReadableStream<Uint
               };
               const content = parsed.choices?.[0]?.delta?.content;
               if (content) {
-                controller.enqueue(encoder.encode(content));
+                safeEnqueue(encoder.encode(content));
               }
             } catch {
               // JSON 파싱 실패 무시
@@ -165,18 +169,17 @@ export function sendToGateway(options: OpenClawSendOptions): ReadableStream<Uint
           }
         }
 
-        controller.close();
+        safeClose();
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
           // 타임아웃에 의한 중단 — 이미 처리됨
         } else {
           const msg = err instanceof Error ? err.message : String(err);
-          try {
-            controller.enqueue(encoder.encode(`\n[Gateway 연결 오류] ${msg}`));
-            controller.close();
-          } catch {}
+          safeEnqueue(encoder.encode(`\n[Gateway 연결 오류] ${msg}`));
+          safeClose();
         }
       } finally {
+        try { reader?.releaseLock(); } catch {}
         clearTimeout(timeout);
       }
     },

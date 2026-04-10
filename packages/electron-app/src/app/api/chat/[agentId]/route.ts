@@ -157,11 +157,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
   const agent = await fetchAgent(agentId, cookie);
   if (!agent) return Response.json({ ok: false, error: '에이전트를 찾을 수 없습니다' }, { status: 404 });
 
-  // Gateway 우선 시도
+  // Gateway 우선 시도, 실패 시 CLI fallback
   const gatewayAvailable = await isGatewayAvailable();
 
   if (gatewayAvailable) {
-    return respondViaGateway(user.id, agentId, agent, body.message, body.sessionKey);
+    return respondViaGatewayWithFallback(
+      user.id, agentId, agent, body.message, body.sessionKey, cookie,
+    );
   }
 
   // CLI fallback
@@ -200,7 +202,106 @@ function respondViaGateway(
       if (fullText.trim()) {
         ChatLogs.add({ id: randomUUID(), user_id: userId, agent_id: agentId, role: 'assistant', content: fullText.trim(), session_key: key });
       }
-    } catch {}
+    } catch (err) {
+      console.error(`[ChatLog] 대화 기록 저장 실패 (agent=${agentId}):`, err);
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+
+  return new Response(browserStream, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'X-Chat-Mode': 'gateway',
+      'X-OpenClaw-Session-Key': key,
+    },
+  });
+}
+
+// ── Gateway + CLI fallback 래퍼 ──────────────────────────────────────
+
+/**
+ * Gateway 스트림의 첫 청크를 확인하여 에러이면 CLI로 재시도한다.
+ * Gateway 프로세스가 isGatewayAvailable() 체크 후 crash한 경우를 처리.
+ */
+async function respondViaGatewayWithFallback(
+  userId: string, agentId: string, agent: VmAgent, message: string,
+  sessionKey: string | undefined, cookie: string,
+): Promise<Response> {
+  const key = sessionKey || `${userId}:${agentId}`;
+  const openclawAgentId = agent.command_name || agentId;
+
+  const gatewayStream = sendToGateway({
+    agentId: openclawAgentId,
+    message,
+    sessionKey: key,
+    model: agent.model ? `claude-cli/${agent.model}` : undefined,
+    stream: true,
+  });
+
+  const reader = gatewayStream.getReader();
+  const firstChunk = await reader.read();
+
+  if (firstChunk.done) {
+    reader.releaseLock();
+    return respondViaCli(userId, agentId, agent, message, cookie);
+  }
+
+  const firstText = new TextDecoder().decode(firstChunk.value).trimStart();
+
+  // Gateway 연결 에러 감지 → CLI fallback
+  if (firstText.startsWith('[Gateway 연결 오류]') || firstText.startsWith('[Gateway 오류')) {
+    reader.releaseLock();
+    console.warn(`[Chat] Gateway 에러 감지, CLI fallback (agent=${agentId}): ${firstText.slice(0, 100)}`);
+    return respondViaCli(userId, agentId, agent, message, cookie);
+  }
+
+  // 정상 — 나머지 스트림을 이어서 전달
+  const encoder = new TextEncoder();
+  const passthrough = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      // 첫 청크 전달
+      controller.enqueue(firstChunk.value!);
+
+      // 나머지 스트림 이어서 읽기
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+      } catch (err) {
+        console.error(`[Chat] Gateway 스트림 읽기 오류:`, err);
+      } finally {
+        try { controller.close(); } catch {}
+        reader.releaseLock();
+      }
+    },
+  });
+
+  const [browserStream, logStream] = passthrough.tee();
+
+  // 백그라운드 로그 저장
+  (async () => {
+    const logReader = logStream.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+    try {
+      while (true) {
+        const { done, value } = await logReader.read();
+        if (done) break;
+        fullText += decoder.decode(value, { stream: true });
+      }
+      if (fullText.trim()) {
+        ChatLogs.add({ id: randomUUID(), user_id: userId, agent_id: agentId, role: 'assistant', content: fullText.trim(), session_key: key });
+      }
+    } catch (err) {
+      console.error(`[ChatLog] 대화 기록 저장 실패 (agent=${agentId}):`, err);
+    } finally {
+      logReader.releaseLock();
+    }
   })();
 
   return new Response(browserStream, {

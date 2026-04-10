@@ -67,7 +67,15 @@ export function getRestartCount(): number {
 /**
  * Gateway를 시작한다. 이미 외부에서 실행 중이면 연결만 확인한다.
  */
-export async function startGateway(): Promise<{ ok: boolean; reason?: string }> {
+export async function startGateway(manual = false): Promise<{ ok: boolean; reason?: string }> {
+  // 수동 호출 시 카운터 리셋
+  if (manual) _restartCount = 0;
+
+  // 이미 starting 중이면 중복 방지
+  if (_state === 'starting') {
+    return { ok: false, reason: 'already_starting' };
+  }
+
   // 이미 실행 중인 Gateway 확인
   if (await isGatewayAvailable()) {
     _state = 'running';
@@ -96,7 +104,16 @@ export async function startGateway(): Promise<{ ok: boolean; reason?: string }> 
     _process = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
-      env: { ...process.env },
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
+        OPENCLAW_CONFIG_DIR: process.env.OPENCLAW_CONFIG_DIR,
+        DATA_DIR: process.env.DATA_DIR,
+        NODE_ENV: process.env.NODE_ENV,
+      },
     });
 
     _process.on('exit', (code) => {
@@ -185,10 +202,10 @@ function startHealthCheck(): void {
       _state = 'running';
     } else if (_state === 'running') {
       _state = 'stopped';
-      // 자동 재시작 시도
+      // 자동 재시작 시도 (backoff 적용)
       if (_restartCount < MAX_RESTARTS) {
         _restartCount++;
-        startGateway();
+        setTimeout(() => startGateway(), 2000 * _restartCount);
       }
     }
   }, HEALTH_CHECK_INTERVAL_MS);

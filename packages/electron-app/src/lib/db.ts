@@ -10,9 +10,14 @@ import fs from 'fs';
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new Database(path.join(DATA_DIR, 'local.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+// Next.js 핫 리로드 시 DB 인스턴스 재사용 (모듈 재평가 방지)
+const globalDb = globalThis as unknown as { __localDb?: Database.Database; __localDbInitDone?: boolean };
+if (!globalDb.__localDb) {
+  globalDb.__localDb = new Database(path.join(DATA_DIR, 'local.db'));
+  globalDb.__localDb.pragma('journal_mode = WAL');
+  globalDb.__localDb.pragma('foreign_keys = ON');
+}
+const db = globalDb.__localDb;
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
@@ -124,9 +129,12 @@ try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAU
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 
-// 서버 재시작 시 stuck 잡 정리
-db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
-db.prepare("UPDATE mission_jobs SET status='failed' WHERE status IN ('running','gate_pending')").run();
+// 서버 재시작 시 stuck 잡 정리 (핫 리로드 시 중복 실행 방지)
+if (!globalDb.__localDbInitDone) {
+  globalDb.__localDbInitDone = true;
+  db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
+  db.prepare("UPDATE mission_jobs SET status='failed' WHERE status IN ('running','gate_pending')").run();
+}
 
 export default db;
 

@@ -4,7 +4,7 @@
  */
 import { Missions, MissionJobs } from './db.js';
 import { readAllPersonalSecrets } from './personal-vault.js';
-import { CLAUDE_CLI } from './claude-cli.js';
+import { CLAUDE_CLI, CLAUDE_ENV } from './claude-cli.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -82,7 +82,7 @@ async function callClaude(
     try {
       const { stdout } = await execFileAsync(CLAUDE_CLI, ['-p', prompt, ...toolArgs, ...modelArgs, ...imagePaths], {
         cwd, encoding: 'utf8', timeout: 300_000,
-        env: { ...process.env, ...extraEnv },
+        env: { ...CLAUDE_ENV, ...extraEnv },
         maxBuffer: 10 * 1024 * 1024,
       });
       return stdout.trim();

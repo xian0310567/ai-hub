@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { CLAUDE_CLI } from '@/lib/claude-cli';
+import { CLAUDE_CLI, CLAUDE_ENV } from '@/lib/claude-cli';
 
 // GET /api/auth — claude 연결 상태 확인
 export async function GET(req: NextRequest) {
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
     execSync(`${CLAUDE_CLI} -p "1+1=" --output-format text`, {
       timeout: 15000,
       stdio: 'pipe',
-      env: { ...process.env },
+      env: CLAUDE_ENV,
     });
     loggedIn = true;
   } catch {}

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
-import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
+import { CLAUDE_CLI, CLAUDE_ENV, claudeSpawnError } from '@/lib/claude-cli';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -97,23 +97,25 @@ async function getWsPath(
     return p;
   };
 
+  const ensureDir = (p: string) => { fs.mkdirSync(p, { recursive: true }); return p; };
+
   if (orgType === 'division') {
     const div = await vmGet<VmDivision>(`/api/divisions/${orgId}`, cookie);
     if (!div) return null;
-    const wsPath = div.ws_path?.trim() || fallback(orgId);
+    const wsPath = ensureDir(div.ws_path?.trim() || fallback(orgId));
     return { wsPath };
   }
   if (orgType === 'department') {
     const ws = await vmGet<VmWorkspace>(`/api/workspaces/${orgId}`, cookie);
     if (!ws) return null;
-    const wsPath = ws.path?.trim() || fallback(orgId);
+    const wsPath = ensureDir(ws.path?.trim() || fallback(orgId));
     return { wsPath, workspaceId: ws.id };
   }
   // team
   const team = await vmGet<VmTeam>(`/api/teams/${orgId}`, cookie);
   if (!team) return null;
   const ws = await vmGet<VmWorkspace>(`/api/workspaces/${team.workspace_id}`, cookie);
-  const wsPath = ws?.path?.trim() || fallback(orgId);
+  const wsPath = ensureDir(ws?.path?.trim() || fallback(orgId));
   return { wsPath, workspaceId: ws?.id ?? team.workspace_id };
 }
 
@@ -167,7 +169,7 @@ ${task}
 
     try {
       const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
-        cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
+        cwd: wsPath, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV,
       });
       const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
       const design = JSON.parse(cleaned);
@@ -219,7 +221,7 @@ ${task}
 
   try {
     const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
-      cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
+      cwd: wsPath, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV,
     });
     const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
     const design = JSON.parse(cleaned);
@@ -344,7 +346,7 @@ ${soul}
 
 개선된 SOUL.md만 출력 (## 정체성, ## 핵심 역할, ## 업무 처리 원칙, ## 협업 방식, ## 보고 형식 섹션 포함):`;
           const improved = execFileSync(CLAUDE_CLI, ['-p', improvePrompt], {
-            cwd: wsPath, encoding: 'utf8', timeout: 60000, env: { ...process.env },
+            cwd: wsPath, encoding: 'utf8', timeout: 60000, env: CLAUDE_ENV,
           }).trim();
           if (improved && improved.length > 50) {
             vmPatch('/api/agents', cookie, { id: agentId, soul: improved });

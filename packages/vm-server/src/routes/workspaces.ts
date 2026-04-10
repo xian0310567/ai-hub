@@ -51,6 +51,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
     const { id } = req.body as { id: string };
+    const child = await q1('SELECT id FROM teams WHERE workspace_id = ? LIMIT 1', [id]);
+    if (child) {
+      reply.code(409);
+      return { ok: false, error: '하위 팀이 존재합니다. 먼저 하위 조직을 삭제해주세요.' };
+    }
     await exec('DELETE FROM workspaces WHERE id = ? AND org_id = ?', [id, user.orgId]);
     return { ok: true };
   });

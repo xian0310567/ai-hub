@@ -59,6 +59,11 @@ export async function teamRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const { id } = req.body as { id: string };
+    const child = await q1('SELECT id FROM parts WHERE team_id = ? LIMIT 1', [id]);
+    if (child) {
+      reply.code(409);
+      return { ok: false, error: '하위 파트가 존재합니다. 먼저 하위 조직을 삭제해주세요.' };
+    }
     await exec('DELETE FROM teams WHERE id = ? AND org_id = ?', [id, user.orgId]);
     return { ok: true };
   });

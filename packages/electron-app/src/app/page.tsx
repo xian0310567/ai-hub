@@ -544,18 +544,19 @@ export default function Dashboard() {
 
       {/* ── 미션 좌측 패널 ── */}
       <div id="mission-panel">
-        <div style={{padding:'10px 14px',borderBottom:'1px solid var(--border)',flexShrink:0,background:'var(--bg-elevated)',display:'flex',alignItems:'center',gap:8}}>
-          <span style={{fontSize:14}}>🎯</span>
-          <span style={{fontSize:12,fontWeight:700,color:'var(--text-primary)'}}>미션</span>
+        <div className="mission-header">
+          <span style={{fontSize:16}}>🎯</span>
+          <span className="mission-title">미션 센터</span>
           {missions.filter(m=>m.phase==='running'||m.phase==='routing').length > 0 && (
-            <span style={{fontSize:10,color:'var(--text-muted)',marginLeft:'auto'}}>{missions.filter(m=>m.phase==='running'||m.phase==='routing').length}개 진행중</span>
+            <span className="mission-count-badge">{missions.filter(m=>m.phase==='running'||m.phase==='routing').length}개 진행중</span>
           )}
         </div>
         <div className="mission-list">
           {missions.length === 0 && (
-            <div style={{padding:'32px 16px',textAlign:'center',color:'var(--text-muted)',fontSize:11}}>
-              <div style={{fontSize:28,marginBottom:8,opacity:0.3}}>🎯</div>
-              미션을 입력하면 AI들이<br/>병렬로 처리합니다
+            <div className="mission-empty">
+              <div className="mission-empty-icon">🚀</div>
+              <div className="mission-empty-title">미션을 시작하세요</div>
+              <div className="mission-empty-desc">아래에 미션을 입력하면<br/>AI 에이전트들이 병렬로 처리합니다</div>
             </div>
           )}
           {missions.map(m => (
@@ -566,44 +567,36 @@ export default function Dashboard() {
             >
               <div className="mc-task">{m.task}</div>
               <div className="mc-status">
-                {m.phase==='routing' && <><div className="pulse-dot" style={{background:'#f59e0b'}} /><span style={{color:'#f59e0b'}}>분석 중</span></>}
-                {m.phase==='clarify' && <><div className="pulse-dot" style={{background:'var(--accent)'}} /><span style={{color:'var(--accent)'}}>확인 필요</span></>}
-                {m.phase==='confirm' && <><span style={{color:'var(--accent)',fontSize:10}}>●</span><span style={{color:'var(--accent)'}}>실행 대기</span></>}
-                {m.phase==='running' && <><div className="pulse-dot" style={{background:'var(--success)'}} /><span style={{color:'var(--success)'}}>실행 중 ({m.steps.filter((s:any)=>s.status==='done').length}/{m.steps.length})</span></>}
-                {m.phase==='done' && <><span style={{color:'var(--success)',fontSize:10}}>✓</span><span style={{color:'var(--success)'}}>완료</span></>}
-                {m.phase==='error' && <><span style={{color:'var(--danger)',fontSize:10}}>✕</span><span style={{color:'var(--danger)'}}>오류</span></>}
-                <button onClick={e=>{e.stopPropagation();removeMission(m.id);}} style={{marginLeft:'auto',background:'none',border:'none',color:'var(--text-muted)',cursor:'pointer',fontSize:10,padding:'0 2px',lineHeight:1}}
-                  onMouseOver={e=>e.currentTarget.style.color='var(--danger)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>✕</button>
+                {m.phase==='routing' && <span className="mc-status-pill routing"><span className="pulse-dot" style={{background:'#f59e0b'}} />분석 중</span>}
+                {m.phase==='clarify' && <span className="mc-status-pill clarify"><span className="pulse-dot" style={{background:'var(--accent)'}} />확인 필요</span>}
+                {m.phase==='confirm' && <span className="mc-status-pill confirm">● 실행 대기</span>}
+                {m.phase==='running' && <span className="mc-status-pill running"><span className="pulse-dot" style={{background:'var(--success)'}} />실행 중 {m.steps.filter((s:any)=>s.status==='done').length}/{m.steps.length}</span>}
+                {m.phase==='done' && <span className="mc-status-pill done">✓ 완료</span>}
+                {m.phase==='error' && <span className="mc-status-pill error">✕ 오류</span>}
+                <button className="mc-delete-btn" onClick={e=>{e.stopPropagation();removeMission(m.id);}}>✕</button>
               </div>
 
               {/* 진행률 바 (running 상태 미션만) */}
               {m.phase==='running' && m.progress && (
-                <div style={{marginTop:8}} onClick={e=>e.stopPropagation()}>
-                  <div style={{width:'100%',height:'8px',background:'var(--bg-canvas)',borderRadius:'4px',overflow:'hidden'}}>
-                    <div
-                      style={{
-                        width: `${m.progress.percentage}%`,
-                        height: '100%',
-                        background: 'var(--accent)',
-                        transition: 'width 0.3s ease',
-                      }}
-                    />
+                <div onClick={e=>e.stopPropagation()}>
+                  <div className="mission-progress-track">
+                    <div className="mission-progress-fill" style={{width: `${m.progress.percentage}%`}} />
                   </div>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,fontSize:9,color:'var(--text-muted)'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,fontSize:10,color:'var(--text-muted)'}}>
                     <span>{m.progress.completed}/{m.progress.total} 완료</span>
                     {(() => {
                       const runningStep = m.steps.find((s:any) => s.status === 'running');
                       const waitingCount = m.steps.filter((s:any) => s.status === 'waiting' || s.status === 'queued').length;
                       return (
-                        <div style={{display:'flex',alignItems:'center',gap:4}}>
+                        <div style={{display:'flex',alignItems:'center',gap:6}}>
                           {runningStep && (
-                            <span style={{color:'var(--accent)',fontWeight:600}}>
+                            <span style={{color:'var(--accent)',fontWeight:600,fontSize:10}}>
                               ▶ {runningStep.agent_name}
                             </span>
                           )}
                           {waitingCount > 0 && (
-                            <span style={{color:'var(--text-muted)'}}>
-                              | 대기 {waitingCount}개
+                            <span style={{color:'var(--text-muted)',fontSize:10}}>
+                              · 대기 {waitingCount}
                             </span>
                           )}
                         </div>
@@ -615,41 +608,31 @@ export default function Dashboard() {
 
               {/* 확장된 미션 상세 (활성 미션만) */}
               {activeMissionId===m.id && (
-                <div style={{marginTop:10,borderTop:'1px solid var(--border-subtle)',paddingTop:10}} onClick={e=>e.stopPropagation()}>
-                  {/* 원본 미션 지시 내용 */}
-                  <div style={{marginBottom:12,padding:'10px 12px',background:'var(--bg-canvas)',border:'1px solid var(--border-subtle)',borderRadius:6}}>
-                    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
-                      <span style={{fontSize:11,fontWeight:700,color:'var(--accent)'}}>📋 원본 미션 지시</span>
-                    </div>
-                    <div style={{fontSize:11,color:'var(--text-primary)',lineHeight:1.6,whiteSpace:'pre-wrap',maxHeight:'200px',overflowY:'auto'}}>
-                      {m.task}
-                    </div>
-                  </div>
-
+                <div className="mission-detail" onClick={e=>e.stopPropagation()}>
                   {m.phase==='routing' && (
-                    <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 0'}}>
-                      <span style={{fontSize:12}}>⏳</span>
-                      <span style={{fontSize:11,color:'#f59e0b',fontWeight:500}}>조직도를 분석하고 업무를 배정하는 중...</span>
+                    <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',background:'#f59e0b0a',border:'1px solid #f59e0b22',borderRadius:8}}>
+                      <span className="pulse-dot" style={{background:'#f59e0b'}} />
+                      <span style={{fontSize:12,color:'#f59e0b',fontWeight:500}}>조직도를 분석하고 업무를 배정하는 중...</span>
                     </div>
                   )}
 
                   {m.phase==='clarify' && m.clarify && (
                     <div>
-                      <div style={{display:'flex',alignItems:'flex-start',gap:8,marginBottom:8}}>
-                        <span style={{fontSize:14}}>🤔</span>
+                      <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:10,padding:'10px 12px',background:'var(--accent-dim)',borderRadius:8,border:'1px solid #0d99ff22'}}>
+                        <span style={{fontSize:16,flexShrink:0}}>🤔</span>
                         <div style={{flex:1}}>
-                          <div style={{fontSize:11,fontWeight:700,color:'var(--text-primary)',marginBottom:3}}>확인이 필요합니다</div>
-                          <div style={{fontSize:10,color:'var(--text-secondary)',lineHeight:1.6}}>{m.clarify.gap}</div>
+                          <div style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:4}}>확인이 필요합니다</div>
+                          <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}}>{m.clarify.gap}</div>
                         </div>
                       </div>
-                      <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                      <div style={{display:'flex',flexDirection:'column',gap:5}}>
                         {m.clarify.options?.map((opt: any) => (
                           <button key={opt.id} onClick={()=>pickClarifyOption(m.id, opt)}
-                            style={{textAlign:'left',padding:'8px 10px',background:'var(--bg-canvas)',border:'1px solid var(--border)',borderRadius:5,cursor:'pointer',transition:'all .12s',fontFamily:'inherit'}}
-                            onMouseOver={e=>{e.currentTarget.style.borderColor='var(--accent)';}}
-                            onMouseOut={e=>{e.currentTarget.style.borderColor='var(--border)';}}>
-                            <div style={{fontSize:11,fontWeight:600,color:'var(--text-primary)',marginBottom:2}}>{opt.label}</div>
-                            <div style={{fontSize:10,color:'var(--text-secondary)',lineHeight:1.4}}>{opt.description}</div>
+                            style={{textAlign:'left',padding:'10px 12px',background:'var(--bg-canvas)',border:'1px solid var(--border)',borderRadius:8,cursor:'pointer',transition:'all .15s',fontFamily:'inherit'}}
+                            onMouseOver={e=>{e.currentTarget.style.borderColor='var(--accent)';e.currentTarget.style.background='var(--bg-hover)';}}
+                            onMouseOut={e=>{e.currentTarget.style.borderColor='var(--border)';e.currentTarget.style.background='var(--bg-canvas)';}}>
+                            <div style={{fontSize:12,fontWeight:600,color:'var(--text-primary)',marginBottom:3}}>{opt.label}</div>
+                            <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.5}}>{opt.description}</div>
                           </button>
                         ))}
                       </div>
@@ -659,33 +642,34 @@ export default function Dashboard() {
                   {m.phase==='confirm' && m.data && (
                     <div>
                       {m.data.summary && (
-                        <div style={{fontSize:10,color:'var(--text-muted)',lineHeight:1.5,marginBottom:8,padding:'6px 8px',background:'var(--bg-canvas)',borderRadius:4,borderLeft:'2px solid var(--accent)'}}>
+                        <div style={{fontSize:11,color:'var(--text-secondary)',lineHeight:1.6,marginBottom:10,padding:'8px 12px',background:'var(--bg-canvas)',borderRadius:8,borderLeft:'3px solid var(--accent)'}}>
                           {m.data.summary}
                         </div>
                       )}
-                      <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:8}}>
-                        <span style={{fontSize:10,color:'var(--text-secondary)'}}>{m.data.routing?.length}개 조직 배정됨</span>
-                        <button onClick={()=>setRoutingReportId(m.id)} style={{marginLeft:'auto',fontSize:10,background:'none',border:'1px solid var(--accent)',color:'var(--accent)',padding:'3px 10px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>📋 보고서 보기</button>
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+                        <span style={{fontSize:11,color:'var(--text-secondary)',fontWeight:500}}>{m.data.routing?.length}개 조직 배정됨</span>
+                        <button onClick={()=>setRoutingReportId(m.id)} className="mission-action-btn secondary" style={{marginLeft:'auto',fontSize:10,borderColor:'var(--accent)',color:'var(--accent)'}}>📋 보고서</button>
                       </div>
                       <div style={{display:'flex',gap:6}}>
-                        <button onClick={()=>removeMission(m.id)} style={{flex:1,fontSize:10,background:'none',border:'1px solid var(--border)',color:'var(--text-muted)',padding:'6px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>취소</button>
-                        <button onClick={()=>runMission(m.id)} style={{flex:2,fontSize:10,background:'var(--success)',color:'#fff',border:'none',padding:'6px',borderRadius:4,cursor:'pointer',fontWeight:600,fontFamily:'inherit'}}>▶ 실행</button>
+                        <button onClick={()=>removeMission(m.id)} className="mission-action-btn secondary" style={{flex:1}}>취소</button>
+                        <button onClick={()=>runMission(m.id)} className="mission-action-btn primary" style={{flex:2}}>▶ 미션 실행</button>
                       </div>
                     </div>
                   )}
 
                   {(m.phase==='running'||m.phase==='done') && m.steps.length > 0 && (
                     <div ref={m.phase==='running'?missionLogRef:undefined}>
-                      <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                      <div style={{display:'flex',flexDirection:'column',gap:4}}>
                         {m.steps.map((s: any, i: number) => {
                           const stepKey = `${m.id}-${i}`;
                           const isExpanded = !!expandedSteps[stepKey];
                           const hasOutput = !!(s.output || s.error);
                           return (
-                            <div key={i} style={{borderRadius:4,border:'1px solid var(--border-subtle)',background:'var(--bg-canvas)',overflow:'hidden',
+                            <div key={i} className="mission-step-card" style={{
                               borderLeftColor:s.status==='done'?'var(--success)':s.status==='running'?'#f59e0b':s.status==='failed'?'var(--danger)':'var(--border)',borderLeftWidth:2}}>
                               <div
-                                style={{display:'flex',alignItems:'center',gap:6,padding:'5px 8px',fontSize:10,cursor:hasOutput?'pointer':'default'}}
+                                className="mission-step-header"
+                                style={{cursor:hasOutput?'pointer':'default'}}
                                 onClick={()=>hasOutput&&toggleStep(m.id,i)}
                               >
                                 <div className="agent-indicator">
@@ -696,12 +680,12 @@ export default function Dashboard() {
                                   {s.status==='failed' && <span className="agent-indicator-failed">✕</span>}
                                   {!s.status && <div className="agent-indicator-queued" />}
                                 </div>
-                                <span style={{fontWeight:500,color:'var(--text-primary)',flex:1}}>{s.org_name}</span>
-                                <span style={{color:'var(--text-muted)',fontSize:9}}>{s.status==='running'?'작업 중':s.status==='done'?'완료':s.status==='failed'?'실패':s.status==='waiting'?`대기 ${s.queue_position??''}번째`:'대기'}</span>
-                                {hasOutput && <span style={{color:'var(--text-muted)',fontSize:9,marginLeft:4}}>{isExpanded?'▲':'▼'}</span>}
+                                <span style={{fontWeight:500,color:'var(--text-primary)',flex:1,fontSize:11}}>{s.org_name}</span>
+                                <span style={{color:'var(--text-muted)',fontSize:10}}>{s.status==='running'?'작업 중':s.status==='done'?'완료':s.status==='failed'?'실패':s.status==='waiting'?`대기 ${s.queue_position??''}번째`:'대기'}</span>
+                                {hasOutput && <span style={{color:'var(--text-muted)',fontSize:10,marginLeft:4,transition:'transform .2s',display:'inline-block',transform:isExpanded?'rotate(180deg)':'none'}}>▼</span>}
                               </div>
                               {isExpanded && hasOutput && (
-                                <div style={{padding:'6px 8px 8px',borderTop:'1px solid var(--border-subtle)',fontSize:10,color:'var(--text-secondary)',lineHeight:1.6,whiteSpace:'pre-wrap',maxHeight:200,overflowY:'auto',background:'#0d0d12'}}>
+                                <div className="mission-step-output">
                                   {s.error ? <span style={{color:'var(--danger)'}}>{s.error}</span> : s.output}
                                 </div>
                               )}
@@ -709,22 +693,22 @@ export default function Dashboard() {
                           );
                         })}
                       </div>
-                      {m.err && <div style={{fontSize:10,color:'var(--danger)',marginTop:6}}>{m.err}</div>}
+                      {m.err && <div style={{fontSize:11,color:'var(--danger)',marginTop:8,padding:'6px 10px',background:'var(--danger-dim)',borderRadius:6}}>{m.err}</div>}
                     </div>
                   )}
 
                   {m.phase==='done' && (
-                    <div style={{display:'flex',gap:6,marginTop: m.steps.length>0?6:0}}>
-                      <button onClick={()=>{setActiveMissionId(m.id);setMissionResultOpen(true);}} style={{flex:1,fontSize:10,background:'var(--accent)',color:'#fff',border:'none',padding:'6px',borderRadius:4,cursor:'pointer',fontWeight:600,fontFamily:'inherit'}}>📄 결과 보기</button>
-                      <button onClick={()=>navigator.clipboard.writeText(m.doc)} style={{fontSize:10,background:'none',border:'1px solid var(--border)',color:'var(--text-muted)',padding:'6px 10px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>📋</button>
-                      <button onClick={()=>removeMission(m.id)} style={{fontSize:10,background:'none',border:'1px solid var(--border)',color:'var(--text-muted)',padding:'6px 10px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>✕</button>
+                    <div style={{display:'flex',gap:6,marginTop: m.steps.length>0?8:0}}>
+                      <button onClick={()=>{setActiveMissionId(m.id);setMissionResultOpen(true);}} className="mission-action-btn accent" style={{flex:1}}>📄 결과 보기</button>
+                      <button onClick={()=>navigator.clipboard.writeText(m.doc)} className="mission-action-btn secondary" style={{padding:'7px 10px'}}>📋</button>
+                      <button onClick={()=>removeMission(m.id)} className="mission-action-btn secondary" style={{padding:'7px 10px'}}>✕</button>
                     </div>
                   )}
 
                   {m.phase==='error' && (
                     <div>
-                      <div style={{fontSize:10,color:'var(--danger)',marginBottom:6}}>{m.err}</div>
-                      <button onClick={()=>removeMission(m.id)} style={{fontSize:10,background:'none',border:'1px solid var(--border)',color:'var(--text-muted)',padding:'6px 10px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>닫기</button>
+                      <div style={{fontSize:11,color:'var(--danger)',marginBottom:8,padding:'8px 10px',background:'var(--danger-dim)',borderRadius:6,border:'1px solid #f2482222'}}>{m.err}</div>
+                      <button onClick={()=>removeMission(m.id)} className="mission-action-btn secondary">닫기</button>
                     </div>
                   )}
                 </div>
@@ -733,32 +717,32 @@ export default function Dashboard() {
           ))}
         </div>
         <div className="mission-input-area">
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
             <textarea
+              className="mission-textarea"
               value={missionInput} onChange={e=>setMissionInput(e.target.value)}
-              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&(e.preventDefault(),submitMission())}
+              onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&(e.preventDefault(),submitMission())}
               onPaste={handlePaste}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
-              placeholder="미션을 입력하세요... (Shift+Enter로 줄바꿈, Ctrl/Cmd+V로 이미지 붙여넣기)"
+              placeholder="미션을 입력하세요... (Shift+Enter 줄바꿈)"
               rows={2}
-              style={{width:'100%',background:'rgba(255,255,255,0.04)',border:'1px solid var(--border)',borderRadius:6,padding:'8px 12px',color:'var(--text-primary)',fontSize:11,fontFamily:'inherit',outline:'none',resize:'none',lineHeight:1.6,overflowY:'hidden',boxSizing:'border-box'}}
               ref={el=>{ if(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; } }}
               onInput={e=>{ const el=e.currentTarget; el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }}
             />
             {missionImages.length > 0 && (
               <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                  <span style={{fontSize:10,color:'var(--text-muted)',fontWeight:500}}>{missionImages.length}/5 images</span>
-                </div>
+                <span style={{fontSize:10,color:'var(--text-muted)',fontWeight:500}}>{missionImages.length}/5 이미지 첨부됨</span>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
                   {missionImages.map((img, idx) => (
-                    <div key={idx} style={{position:'relative',width:60,height:60,borderRadius:4,overflow:'hidden',border:'1px solid var(--border)'}}>
+                    <div key={idx} style={{position:'relative',width:52,height:52,borderRadius:8,overflow:'hidden',border:'1px solid var(--border)',transition:'border-color .12s'}}
+                      onMouseOver={e=>e.currentTarget.style.borderColor='var(--accent)'}
+                      onMouseOut={e=>e.currentTarget.style.borderColor='var(--border)'}>
                       <img src={img} alt={`첨부 이미지 ${idx + 1}`} style={{width:'100%',height:'100%',objectFit:'cover'}} />
                       <button
                         onClick={() => removeImage(idx)}
                         aria-label={`이미지 ${idx + 1} 삭제`}
-                        style={{position:'absolute',top:2,right:2,width:18,height:18,borderRadius:'50%',background:'rgba(0,0,0,0.7)',border:'none',color:'#fff',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1,padding:0}}
+                        style={{position:'absolute',top:2,right:2,width:16,height:16,borderRadius:'50%',background:'rgba(0,0,0,0.7)',border:'none',color:'#fff',fontSize:10,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1,padding:0,transition:'background .12s'}}
                         onMouseOver={e=>e.currentTarget.style.background='var(--danger)'}
                         onMouseOut={e=>e.currentTarget.style.background='rgba(0,0,0,0.7)'}
                       >
@@ -769,8 +753,8 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-            <button onClick={submitMission} disabled={!missionInput.trim()} style={{background:'var(--accent-purple)',color:'#fff',border:'none',borderRadius:6,padding:'7px',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',opacity:missionInput.trim()?1:0.4,width:'100%'}}>
-              전송
+            <button onClick={submitMission} disabled={!missionInput.trim()} className="mission-submit-btn">
+              미션 전송
             </button>
           </div>
         </div>
@@ -986,283 +970,277 @@ function patternLabel(p: string): string {
 type SelectAgent = (a: Agent) => void;
 
 // ─────────────────────────────────────────────────────────────────────
-// GATHER-TOWN OFFICE COMPONENTS  (defined outside Dashboard to prevent remount)
+// GATHER-TOWN STYLE OFFICE — 2D top-down pixel-art office
 // ─────────────────────────────────────────────────────────────────────
+const WALL = 8;
+const WALL_CLR = '#6a6a72';
+const FLOOR_CLR = '#484850';
+const FLOOR_LOUNGE = '#5a5a88';
+const DESK_CLR = '#c89060';
+const DESK_BORDER = '#a07050';
+const CHAIR_CLR = '#7a4a2a';
+const CHAIR_BORDER = '#5a3a1a';
+const CHAIR_LOUNGE = '#d09030';
+const TABLE_ROUND = '#404050';
 
-/** 탑뷰 에이전트 데스크 — 스프라이트 + 책상 + 네임태그 */
-function AgentDesk({ a, onSelect, isRunning }: { a: Agent; onSelect: SelectAgent; isRunning?: boolean }) {
+/** 사무실 창문 (벽 위에 그려짐) */
+function OfficeWindow() {
+  return <div style={{width:48,height:14,background:'linear-gradient(180deg,#a0c8e0 0%,#80b0d0 50%,#b8d8e8 100%)',border:`2px solid ${WALL_CLR}`,borderRadius:1,boxShadow:'inset 0 0 4px rgba(255,255,255,0.2)'}} />;
+}
+
+/** 책장 (벽 장식) */
+function Bookshelf() {
+  const c = ['#d04040','#4080c0','#40a050','#c08030','#7050a0','#c06040','#40b0b0','#b0b040'];
+  return (
+    <div style={{width:56,height:24,background:'#4a2a1a',border:'2px solid #3a1a0a',borderRadius:1,display:'grid',gridTemplateColumns:'repeat(8,1fr)',gridTemplateRows:'repeat(3,1fr)',gap:1,padding:2,overflow:'hidden'}}>
+      {Array.from({length:24},(_,i)=><div key={i} style={{background:c[i%8],opacity:i%5===0?0.3:1}} />)}
+    </div>
+  );
+}
+
+/** 화분 */
+function OfficePlant({ size='md' }: {size?:'sm'|'md'|'lg'}) {
+  const s = size==='lg'?28:size==='md'?20:14;
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',userSelect:'none',pointerEvents:'none'}}>
+      <div style={{width:s,height:s*0.8,background:'radial-gradient(ellipse,#3a9a4a 20%,#2a7a3a 80%)',borderRadius:'40% 40% 20% 20%'}} />
+      <div style={{width:s*0.35,height:s*0.3,background:'#8a6040',borderRadius:'0 0 2px 2px',marginTop:-1}} />
+    </div>
+  );
+}
+
+/** 의자 (방향별) */
+function Chair({ facing='down' }: {facing?:'up'|'down'}) {
+  return <div style={{
+    width:20,height:14,
+    background:`linear-gradient(${facing==='down'?'180deg':'0deg'},${CHAIR_CLR} 0%,#6a3a1a 100%)`,
+    border:`1px solid ${CHAIR_BORDER}`,
+    borderRadius:facing==='down'?'2px 2px 4px 4px':'4px 4px 2px 2px',
+    boxShadow:'0 1px 2px rgba(0,0,0,0.3)',
+  }} />;
+}
+
+/** 라운지 의자 */
+function LoungeChair() {
+  return <div style={{width:16,height:16,background:CHAIR_LOUNGE,borderRadius:3,border:'1px solid #b07020',boxShadow:'0 1px 2px rgba(0,0,0,0.2)'}} />;
+}
+
+/** 라운드 테이블 + 의자 4개 */
+function RoundTable() {
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:3}}>
+      <div style={{display:'flex',gap:8}}><LoungeChair /><LoungeChair /></div>
+      <div style={{width:40,height:40,background:TABLE_ROUND,borderRadius:'50%',border:'2px solid #505060',boxShadow:'0 2px 6px rgba(0,0,0,0.3)'}} />
+      <div style={{display:'flex',gap:8}}><LoungeChair /><LoungeChair /></div>
+    </div>
+  );
+}
+
+/** 에이전트 좌석 (작은 스프라이트 + 이름표) */
+function AgentSeat({ a, onSelect, isRunning }: { a: Agent; onSelect: SelectAgent; isRunning?: boolean }) {
   const isLead = a.is_lead === 1;
-  const lvl = agentLevelLabel(a.org_level, a.is_lead);
   const glowColor = a.color || '#0d99ff';
-  const desk = (
-    <div
-      className="agent-desk"
-      onClick={() => onSelect(a)}
-      title={`${a.name} — ${lvl}${isRunning ? ' (작업 중)' : ''}`}
+  const wrap = (
+    <div className="agent-desk" onClick={() => onSelect(a)}
+      title={`${a.name} — ${agentLevelLabel(a.org_level, a.is_lead)}${isRunning ? ' (작업 중)' : ''}`}
+      style={{width:46,display:'flex',flexDirection:'column',alignItems:'center',gap:0}}
     >
-      {/* 작업 중 뱃지 */}
-      {isRunning && (
-        <div className="agent-working-badge" style={{ background: glowColor }} />
-      )}
-
-      {/* LEAD 배지 */}
-      {isLead && (
-        <div style={{
-          fontSize:7,fontWeight:800,color:a.color,
-          background:a.color+'25',border:`1px solid ${a.color}55`,
-          padding:'1px 6px',borderRadius:8,marginBottom:3,
-          letterSpacing:'0.08em',whiteSpace:'nowrap',
-        }}>▲ {lvl.toUpperCase()}</div>
-      )}
-
-      {/* 캐릭터 스프라이트 */}
-      <canvas
-        data-sp={isLead ? 'sonnet' : 'haiku'}
-        data-tie={a.color}
-        data-sc={isLead ? '3' : '2.5'}
-        style={{width:28,height:44,imageRendering:'pixelated',flexShrink:0}}
-      />
-
-      {/* 책상 (탑뷰) */}
+      {isRunning && <div className="agent-working-badge" style={{background:glowColor}} />}
+      {/* 이름표 */}
       <div style={{
-        width:54,height:16,
-        background:'linear-gradient(180deg,#3c3c3c 0%,#2e2e2e 100%)',
-        border:'1px solid #4e4e4e',
-        borderBottom:`2px solid ${isLead ? a.color+'99' : '#202020'}`,
-        borderRadius:2,
-        display:'flex',alignItems:'center',justifyContent:'center',gap:3,
-        boxShadow: isRunning
-          ? `0 2px 6px rgba(0,0,0,0.5), 0 0 8px ${glowColor}88`
-          : '0 2px 6px rgba(0,0,0,0.5)',
-        position:'relative',
-        flexShrink:0,
+        fontSize:7,fontWeight:isLead?700:500,
+        color:isRunning?glowColor:'#bbb',
+        background:'rgba(0,0,0,0.75)',padding:'1px 5px',borderRadius:2,
+        marginBottom:1,maxWidth:50,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+        textShadow:isRunning?`0 0 4px ${glowColor}`:'none',
+        border:isLead?`1px solid ${a.color}55`:'1px solid transparent',
       }}>
-        {/* 모니터 — 작업 중이면 밝게 */}
-        <div style={{
-          width:16,height:11,
-          background: isRunning ? '#1a2a3a' : '#0d1117',
-          border:`1px solid ${a.color}${isRunning ? 'cc' : '66'}`,
-          borderRadius:1,
-          boxShadow:`0 0 ${isRunning ? '8px' : '4px'} ${a.color}${isRunning ? '99' : '44'}`,
-          display:'flex',alignItems:'center',justifyContent:'center',gap:1,
-          overflow:'hidden',
-        }}>
-          {isRunning && <>
-            <span className="agent-typing-dot" style={{color:a.color}} />
-            <span className="agent-typing-dot" style={{color:a.color}} />
-            <span className="agent-typing-dot" style={{color:a.color}} />
-          </>}
-        </div>
-        {/* 키보드 */}
-        <div style={{width:11,height:5,background:'#282828',border:'1px solid #3a3a3a',borderRadius:1}} />
+        {isLead && <span style={{color:a.color}}>● </span>}{a.name}
       </div>
-
-      {/* 네임태그 */}
-      <div style={{
-        marginTop:4,
-        fontSize:8,fontWeight:isLead?700:500,
-        color: isRunning ? glowColor : (isLead ? a.color : 'var(--text-muted)'),
-        textAlign:'center',
-        maxWidth:72,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-        letterSpacing:'0.02em',lineHeight:1.3,
-        textShadow: isRunning ? `0 0 6px ${glowColor}` : 'none',
-      }}>
-        {a.emoji} {a.name}
-      </div>
+      {/* 스프라이트 */}
+      <canvas data-sp={isLead?'opus':'sonnet'} data-tie={a.color} data-sc="2"
+        style={{width:20,height:36,imageRendering:'pixelated'}} />
+      {/* 작업중 */}
+      {isRunning && <div style={{display:'flex',gap:1,marginTop:1}}>
+        <span className="agent-typing-dot" style={{color:glowColor}} />
+        <span className="agent-typing-dot" style={{color:glowColor}} />
+        <span className="agent-typing-dot" style={{color:glowColor}} />
+      </div>}
     </div>
   );
-
-  if (!isRunning) return desk;
-  return (
-    <div
-      className="agent-desk-running-wrap"
-      style={{ ['--glow-color' as any]: glowColor, padding: 4, margin: -4 }}
-    >
-      {desk}
-    </div>
-  );
+  if (!isRunning) return wrap;
+  return <div className="agent-desk-running-wrap" style={{['--glow-color' as any]:glowColor,padding:4,margin:-4}}>{wrap}</div>;
 }
 
-/** 파트 구역 */
-function PartZone({ part, onSelect, runningAgentIds }: { part: Part; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
-  const agents = [part.lead, ...part.workers].filter(Boolean) as Agent[];
-  if (agents.length === 0) return null;
-  return (
-    <div style={{
-      position:'relative',
-      border:`1px dotted ${part.color}55`,
-      borderRadius:3,
-      padding:'18px 10px 10px',
-      background:part.color+'06',
-    }}>
-      <div style={{
-        position:'absolute',top:-1,left:6,
-        fontSize:7,fontWeight:700,color:part.color,
-        background:'#14141a',padding:'0 6px',letterSpacing:'0.08em',
-      }}>◆ {part.name}</div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:16,justifyContent:'center'}}>
-        {agents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
-      </div>
-    </div>
-  );
-}
+/** 팀 데스크 클러스터 — 큰 테이블 양쪽에 의자+에이전트 */
+function DeskCluster({ team, onSelect, runningAgentIds }: {
+  team: Team; onSelect: SelectAgent; runningAgentIds: Set<string>;
+}) {
+  const all: Agent[] = [];
+  if (team.lead) all.push(team.lead);
+  all.push(...team.workers);
+  for (const p of team.parts) { if (p.lead) all.push(p.lead); all.push(...p.workers); }
+  if (all.length === 0) return null;
 
-/** 팀 구역 (방 안의 작업 공간) */
-function TeamZone({ team, onSelect, runningAgentIds }: { team: Team; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
-  const directAgents = [team.lead, ...team.workers].filter(Boolean) as Agent[];
-  const hasParts = team.parts.length > 0;
-  const teamHasRunning = directAgents.some(a => runningAgentIds.has(a.id))
-    || team.parts.some(p => [p.lead, ...p.workers].filter(Boolean).some((a: any) => runningAgentIds.has(a.id)));
+  const half = Math.ceil(all.length / 2);
+  const topRow = all.slice(0, half);
+  const bottomRow = all.slice(half);
+  const cols = Math.max(topRow.length, bottomRow.length, 2);
+  const deskW = cols * 52;
+  const hasRunning = all.some(a => runningAgentIds.has(a.id));
 
   return (
-    <div style={{
-      position:'relative',
-      border:`1px dashed ${teamHasRunning ? team.color+'cc' : team.color+'77'}`,
-      borderRadius:4,
-      padding:'20px 12px 12px',
-      background: teamHasRunning ? `${team.color}18` : `${team.color}0a`,
-      boxShadow: teamHasRunning
-        ? `inset 0 0 20px ${team.color}18, 0 0 12px ${team.color}22`
-        : `inset 0 0 20px ${team.color}08`,
-      minWidth:110,
-      transition:'all 0.5s ease',
-    }}>
-      {/* 팀 표지판 */}
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+      {/* 팀명 */}
       <div style={{
-        position:'absolute',top:-1,left:8,
         fontSize:8,fontWeight:700,color:team.color,
-        background:'#14141a',padding:'1px 8px',
-        border:`1px solid ${team.color}${teamHasRunning ? '88' : '44'}`,borderRadius:2,
-        letterSpacing:'0.05em',whiteSpace:'nowrap',
-      }}>▸ {team.name}{teamHasRunning ? ' ⚡' : ''}</div>
-
-      {hasParts ? (
-        <div style={{display:'flex',flexDirection:'column',gap:10}}>
-          {directAgents.length > 0 && (
-            <div style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'center'}}>
-              {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
-            </div>
-          )}
-          {team.parts.map(p => <PartZone key={p.id} part={p} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
-        </div>
-      ) : (
-        <div style={{display:'flex',flexWrap:'wrap',gap:14,justifyContent:'center'}}>
-          {directAgents.map(a => <AgentDesk key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
-          {directAgents.length === 0 && <div style={{fontSize:9,color:'var(--text-muted)',padding:'8px 4px'}}>에이전트 없음</div>}
-        </div>
-      )}
+        background:'rgba(0,0,0,0.6)',padding:'2px 10px',borderRadius:3,
+        border:`1px solid ${team.color}55`,marginBottom:2,
+        boxShadow:hasRunning?`0 0 8px ${team.color}44`:'none',
+      }}>{team.name}{hasRunning?' ⚡':''}</div>
+      {/* 윗줄 에이전트 */}
+      <div style={{display:'flex',gap:2,justifyContent:'center'}}>
+        {topRow.map(a => <AgentSeat key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
+      </div>
+      {/* 윗줄 의자 */}
+      <div style={{display:'flex',gap:28,justifyContent:'center'}}>
+        {topRow.map((_,i) => <Chair key={i} facing="down" />)}
+      </div>
+      {/* 큰 테이블 */}
+      <div style={{
+        width:deskW,height:36,
+        background:`linear-gradient(180deg,${DESK_CLR} 0%,#b08050 100%)`,
+        border:`2px solid ${DESK_BORDER}`,borderRadius:2,
+        display:'flex',alignItems:'center',justifyContent:'center',gap:8,padding:'0 8px',
+        boxShadow:'0 2px 8px rgba(0,0,0,0.4)',
+      }}>
+        {all.map(a => <div key={a.id} style={{
+          width:14,height:10,
+          background:runningAgentIds.has(a.id)?'#2a4a6a':'#1a1a2a',
+          border:`1px solid ${a.color}${runningAgentIds.has(a.id)?'aa':'55'}`,
+          borderRadius:1,
+          boxShadow:runningAgentIds.has(a.id)?`0 0 6px ${a.color}55`:'none',
+        }} />)}
+      </div>
+      {/* 아랫줄 의자 */}
+      {bottomRow.length > 0 && <div style={{display:'flex',gap:28,justifyContent:'center'}}>
+        {bottomRow.map((_,i) => <Chair key={i} facing="up" />)}
+      </div>}
+      {/* 아랫줄 에이전트 */}
+      {bottomRow.length > 0 && <div style={{display:'flex',gap:2,justifyContent:'center'}}>
+        {bottomRow.map(a => <AgentSeat key={a.id} a={a} onSelect={onSelect} isRunning={runningAgentIds.has(a.id)} />)}
+      </div>}
     </div>
   );
 }
 
-/** 실 (Department) 방 */
+/** 실(Department) 방 — 두꺼운 벽 + 창문 + 바닥타일 */
 function DeptRoom({ dept, onSelect, runningAgentIds }: { dept: Dept; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
-  const leadRunning = !!(dept.lead && runningAgentIds.has(dept.lead.id));
+  const winCount = Math.min(dept.teams.length + 1, 3);
   return (
     <div style={{
       position:'relative',
-      border: leadRunning ? '2px solid #5a5a76' : '2px solid #3a3a46',
-      borderRadius:5,
-      background:'#1a1a22',
-      padding:'30px 14px 14px',
-      minWidth:160,
+      border:`${WALL}px solid ${WALL_CLR}`,
+      borderRadius:3,background:FLOOR_CLR,
       backgroundImage:`
-        repeating-linear-gradient(0deg,transparent,transparent 15px,rgba(255,255,255,0.014) 15px,rgba(255,255,255,0.014) 16px),
-        repeating-linear-gradient(90deg,transparent,transparent 15px,rgba(255,255,255,0.014) 15px,rgba(255,255,255,0.014) 16px)
-      `,
-      boxShadow:'inset 0 0 40px rgba(0,0,0,0.3)',
-      transition:'border-color 0.4s',
+        repeating-linear-gradient(0deg,transparent,transparent 31px,rgba(0,0,0,0.08) 31px,rgba(0,0,0,0.08) 32px),
+        repeating-linear-gradient(90deg,transparent,transparent 31px,rgba(0,0,0,0.08) 31px,rgba(0,0,0,0.08) 32px)`,
+      padding:'40px 20px 20px',minWidth:220,
+      boxShadow:'inset 0 0 40px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.3)',
     }}>
-      {/* 문 표시판 */}
-      <div style={{
-        position:'absolute',top:-2,left:12,
-        fontSize:9,fontWeight:700,color:'var(--text-primary)',
-        background:'#252530',border:'1px solid #3a3a46',
-        padding:'2px 12px',borderRadius:3,
-        letterSpacing:'0.04em',whiteSpace:'nowrap',
-      }}>🏢 {dept.name}</div>
+      {/* 방 이름 */}
+      <div style={{position:'absolute',top:WALL+2,left:WALL+8,fontSize:9,fontWeight:700,color:'#ccc',background:'rgba(0,0,0,0.5)',padding:'2px 10px',borderRadius:2,letterSpacing:'0.06em'}}>
+        🏢 {dept.name}
+      </div>
+      {/* 창문들 (상단 벽) */}
+      <div style={{position:'absolute',top:-2,left:0,right:0,display:'flex',gap:16,justifyContent:'center'}}>
+        {Array.from({length:winCount},(_,i) => <OfficeWindow key={i} />)}
+      </div>
+      {/* 문 (하단 벽 중앙) */}
+      <div style={{position:'absolute',bottom:-WALL,left:'50%',transform:'translateX(-50%)',width:28,height:WALL,background:'#8a8a92',borderRadius:'0 0 2px 2px'}} />
 
-      {/* 실장 코너 오피스 */}
+      {/* 실장 코너오피스 */}
       {dept.lead && (
-        <div style={{
-          display:'flex',justifyContent:'center',
-          marginBottom:12,
-          padding:'10px',
-          background:'rgba(255,255,255,0.03)',
-          border:'1px solid rgba(255,255,255,0.06)',
-          borderRadius:3,
-        }}>
-          <AgentDesk a={dept.lead} onSelect={onSelect} isRunning={leadRunning} />
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16,padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderLeft:`3px solid ${dept.lead.color||'#666'}66`,borderRadius:3}}>
+          <AgentSeat a={dept.lead} onSelect={onSelect} isRunning={runningAgentIds.has(dept.lead.id)} />
+          <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'center'}}>
+            {/* 실장 책상 */}
+            <div style={{width:44,height:24,background:`linear-gradient(180deg,${DESK_CLR} 0%,#a07040 100%)`,border:`1px solid ${DESK_BORDER}`,borderRadius:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <div style={{width:14,height:10,background:dept.lead&&runningAgentIds.has(dept.lead.id)?'#2a4a6a':'#1a1a2a',border:`1px solid ${dept.lead.color}66`,borderRadius:1}} />
+            </div>
+            <OfficePlant size="sm" />
+          </div>
         </div>
       )}
 
-      {/* 팀 구역들 */}
-      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-start'}}>
-        {dept.teams.map(t => <TeamZone key={t.id} team={t} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
+      {/* 팀 데스크들 */}
+      <div style={{display:'flex',gap:24,flexWrap:'wrap',justifyContent:'center',alignItems:'flex-start'}}>
+        {dept.teams.map(t => <DeskCluster key={t.id} team={t} onSelect={onSelect} runningAgentIds={runningAgentIds} />)}
         {dept.teams.length === 0 && !dept.lead && (
           <div style={{fontSize:9,color:'var(--text-muted)',padding:'12px 8px',fontStyle:'italic'}}>팀 없음</div>
         )}
       </div>
+
+      {/* 코너 화분 */}
+      <div style={{position:'absolute',bottom:WALL+4,right:WALL+4}}><OfficePlant size="sm" /></div>
+      {dept.teams.length > 1 && <div style={{position:'absolute',bottom:WALL+4,left:WALL+4}}><OfficePlant size="sm" /></div>}
     </div>
   );
 }
 
-/** 부문 (Division) 대형 룸 */
+/** 부문(Division) — 오피스 빌딩 한 층 전체 */
 function DivisionRoom({ div, onSelect, runningAgentIds }: { div: Div; onSelect: SelectAgent; runningAgentIds: Set<string> }) {
   const leadRunning = !!(div.lead && runningAgentIds.has(div.lead.id));
+  const loungeTableCount = Math.min(div.departments.length + 1, 4);
+
   return (
     <div style={{
       position:'relative',
-      border:`2px solid ${div.color}99`,
-      borderRadius:8,
-      padding:'40px 18px 18px',
-      background:`${div.color}06`,
-      boxShadow:`
-        0 0 0 1px ${div.color}22,
-        0 4px 32px ${div.color}18,
-        inset 0 0 80px rgba(0,0,0,0.25)
-      `,
+      border:`${WALL+2}px solid ${div.color}55`,borderRadius:6,
+      padding:'52px 24px 24px',
+      background:`${div.color}04`,
       backgroundImage:`
-        repeating-linear-gradient(0deg,transparent,transparent 63px,${div.color}0a 63px,${div.color}0a 64px),
-        repeating-linear-gradient(90deg,transparent,transparent 63px,${div.color}0a 63px,${div.color}0a 64px)
-      `,
+        repeating-linear-gradient(0deg,transparent,transparent 63px,${div.color}08 63px,${div.color}08 64px),
+        repeating-linear-gradient(90deg,transparent,transparent 63px,${div.color}08 63px,${div.color}08 64px)`,
+      boxShadow:`0 0 0 1px ${div.color}22, inset 0 0 80px rgba(0,0,0,0.2)`,
     }}>
-      {/* 부문 현판 */}
+      {/* 부문 간판 */}
       <div style={{
-        position:'absolute',top:-3,left:16,
-        fontSize:11,fontWeight:800,color:div.color,
-        background:'#14141a',
-        padding:'4px 16px',
-        border:`2px solid ${div.color}99`,
-        borderRadius:4,
-        letterSpacing:'0.05em',
-        boxShadow:`0 0 12px ${div.color}44`,
-        whiteSpace:'nowrap',
+        position:'absolute',top:-7,left:20,
+        fontSize:12,fontWeight:800,color:'#fff',
+        background:`linear-gradient(135deg,${div.color} 0%,${div.color}cc 100%)`,
+        padding:'5px 18px',borderRadius:5,
+        boxShadow:`0 3px 16px ${div.color}55`,
+        whiteSpace:'nowrap',letterSpacing:'0.06em',
       }}>◉ {div.name}</div>
 
-      <div style={{display:'flex',gap:18,flexWrap:'wrap',alignItems:'flex-start'}}>
-        {/* 부문장 코너 */}
+      <div style={{display:'flex',gap:24,flexWrap:'wrap',alignItems:'flex-start'}}>
+        {/* 부문장 오피스 */}
         {div.lead && (
           <div style={{
             position:'relative',
-            border:`1px solid ${div.color}${leadRunning ? 'aa' : '55'}`,
-            borderRadius:5,
-            padding:'22px 14px 12px',
-            background:`${div.color}${leadRunning ? '22' : '14'}`,
-            display:'flex',justifyContent:'center',alignItems:'center',
-            minWidth:90,
-            boxShadow: leadRunning
-              ? `inset 0 0 20px ${div.color}18, 0 0 16px ${div.color}33`
-              : `inset 0 0 20px ${div.color}08`,
-            transition:'all 0.4s',
+            border:`${WALL}px solid ${WALL_CLR}`,borderRadius:3,
+            background:FLOOR_CLR,
+            backgroundImage:'repeating-linear-gradient(0deg,transparent,transparent 31px,rgba(0,0,0,0.08) 31px,rgba(0,0,0,0.08) 32px),repeating-linear-gradient(90deg,transparent,transparent 31px,rgba(0,0,0,0.08) 31px,rgba(0,0,0,0.08) 32px)',
+            padding:'30px 16px 16px',
+            boxShadow:'inset 0 0 30px rgba(0,0,0,0.3)',
           }}>
-            <div style={{
-              position:'absolute',top:-1,left:6,
-              fontSize:7,fontWeight:800,color:div.color,
-              background:'#14141a',padding:'0 7px',
-              letterSpacing:'0.1em',
-            }}>DIRECTOR</div>
-            <AgentDesk a={div.lead} onSelect={onSelect} isRunning={leadRunning} />
+            <div style={{position:'absolute',top:WALL+2,left:WALL+4,fontSize:7,fontWeight:800,color:div.color,background:'rgba(0,0,0,0.5)',padding:'1px 6px',borderRadius:2,letterSpacing:'0.1em'}}>
+              DIRECTOR
+            </div>
+            {/* 디렉터실 창문 */}
+            <div style={{position:'absolute',top:-2,left:WALL+16}}><OfficeWindow /></div>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <AgentSeat a={div.lead} onSelect={onSelect} isRunning={leadRunning} />
+              <div style={{display:'flex',flexDirection:'column',gap:6,alignItems:'center'}}>
+                <div style={{width:44,height:24,background:`linear-gradient(180deg,${DESK_CLR} 0%,#a07040 100%)`,border:`1px solid ${DESK_BORDER}`,borderRadius:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <div style={{width:14,height:10,background:leadRunning?'#2a4a6a':'#1a1a2a',border:`1px solid ${div.color}66`,borderRadius:1,boxShadow:leadRunning?`0 0 4px ${div.color}44`:'none'}} />
+                </div>
+                <div style={{display:'flex',gap:6}}><OfficePlant size="sm" /><span style={{fontSize:10,opacity:0.5,userSelect:'none'}}>🏆</span></div>
+              </div>
+            </div>
+            {/* 문 */}
+            <div style={{position:'absolute',bottom:-WALL,right:16,width:24,height:WALL,background:'#8a8a92',borderRadius:'0 0 2px 2px'}} />
           </div>
         )}
 
@@ -1275,6 +1253,39 @@ function DivisionRoom({ div, onSelect, runningAgentIds }: { div: Div; onSelect: 
           </div>
         )}
       </div>
+
+      {/* ── 라운지 공간 ── */}
+      {div.departments.length > 0 && (
+        <div style={{
+          marginTop:20,
+          border:`${WALL}px solid ${WALL_CLR}`,borderRadius:3,
+          background:FLOOR_LOUNGE,
+          backgroundImage:'repeating-linear-gradient(0deg,transparent,transparent 31px,rgba(0,0,0,0.06) 31px,rgba(0,0,0,0.06) 32px),repeating-linear-gradient(90deg,transparent,transparent 31px,rgba(0,0,0,0.06) 31px,rgba(0,0,0,0.06) 32px)',
+          padding:'32px 24px 20px',
+          display:'flex',gap:28,alignItems:'center',flexWrap:'wrap',
+          boxShadow:'inset 0 0 40px rgba(0,0,0,0.2)',position:'relative',
+        }}>
+          {/* 라운지 간판 */}
+          <div style={{position:'absolute',top:WALL+2,right:WALL+8,fontSize:9,fontWeight:700,color:'#aaa',background:'rgba(0,0,0,0.5)',padding:'2px 8px',borderRadius:2,letterSpacing:'0.1em'}}>
+            LOUNGE
+          </div>
+          {/* 벽면 책장+화분 */}
+          <div style={{position:'absolute',top:-2,left:WALL+12,display:'flex',gap:10,alignItems:'flex-end'}}>
+            <Bookshelf />
+            <OfficePlant size="lg" />
+            <Bookshelf />
+          </div>
+          {/* 라운드 테이블들 */}
+          {Array.from({length:loungeTableCount},(_,i) => <RoundTable key={i} />)}
+          {/* 커피 & 화분 */}
+          <div style={{display:'flex',flexDirection:'column',gap:8,marginLeft:'auto',alignItems:'center'}}>
+            <span style={{fontSize:20,opacity:0.6,userSelect:'none'}}>☕</span>
+            <OfficePlant size="md" />
+          </div>
+          {/* 문 */}
+          <div style={{position:'absolute',bottom:-WALL,left:40,width:28,height:WALL,background:'#8a8a92',borderRadius:'0 0 2px 2px'}} />
+        </div>
+      )}
     </div>
   );
 }

@@ -75,9 +75,30 @@ function resolve(): string {
 
 export const CLAUDE_CLI = resolve();
 
+/**
+ * CLAUDE_CLI 실행에 필요한 env.
+ * cli.js 의 shebang(#!/usr/bin/env node) 이 node를 찾을 수 있도록
+ * resolve된 바이너리의 디렉터리를 PATH 앞에 추가합니다.
+ */
+export const CLAUDE_ENV: NodeJS.ProcessEnv = (() => {
+  const binDir = path.dirname(CLAUDE_CLI);
+  const currentPath = process.env.PATH || '';
+  // 이미 PATH에 포함돼 있으면 그대로, 아니면 앞에 추가
+  const newPath = currentPath.includes(binDir)
+    ? currentPath
+    : `${binDir}:${currentPath}`;
+  return { ...process.env, PATH: newPath };
+})();
+
 /** spawn/execFile ENOENT 에러를 사용자 친화적 메시지로 변환 */
 export function claudeSpawnError(e: any): string {
   if (e?.code === 'ENOENT' || (e?.message && e.message.includes('ENOENT'))) {
+    // cwd 문제인지 CLI 바이너리 문제인지 구분
+    if (existsSync(CLAUDE_CLI)) {
+      const cwd = e?.options?.cwd || e?.spawnargs?.[0];
+      return `작업 디렉터리를 찾을 수 없거나 CLI 실행 중 ENOENT 발생 (CLI: ${CLAUDE_CLI}, cwd: ${cwd || '알 수 없음'}). `
+        + '워크스페이스 경로가 올바른지 확인하세요.';
+    }
     return `Claude CLI를 찾을 수 없습니다 (경로: ${CLAUDE_CLI}). `
       + '해결 방법: npm i -g @anthropic-ai/claude-code 로 설치하거나, '
       + 'CLAUDE_CLI_PATH 환경변수에 claude 바이너리 경로를 지정하세요.';

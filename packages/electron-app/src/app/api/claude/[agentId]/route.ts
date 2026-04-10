@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn, execSync } from 'child_process';
-import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
+import { CLAUDE_CLI, CLAUDE_ENV, claudeSpawnError } from '@/lib/claude-cli';
 import { ChatLogs } from '@/lib/db';
 import { randomUUID } from 'crypto';
 import { getSession, getVmSessionCookie, getUserSessionsDir } from '@/lib/auth';
@@ -97,8 +97,8 @@ function runClaude(
       const proc  = isWin
         ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
             `claude ${args.map(a => `"${a.replace(/"/g, '""')}"`).join(' ')}`
-          ], { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] })
-        : spawn(CLAUDE_CLI, args, { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+          ], { cwd, env: CLAUDE_ENV, stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawn(CLAUDE_CLI, args, { cwd, env: CLAUDE_ENV, stdio: ['ignore', 'pipe', 'pipe'] });
 
       proc.stdout.setEncoding('utf8');
       let buf = ''; let full = '';

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn } from 'child_process';
-import { CLAUDE_CLI, claudeSpawnError } from '@/lib/claude-cli';
+import { CLAUDE_CLI, CLAUDE_ENV, claudeSpawnError } from '@/lib/claude-cli';
 import { getSession, getUserClaudeConfigDir } from '@/lib/auth';
 import fs from 'fs';
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
           })
         : spawn(CLAUDE_CLI, ['login'], {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env, CLAUDE_CONFIG_DIR: claudeConfigDir },
+            env: { ...CLAUDE_ENV, CLAUDE_CONFIG_DIR: claudeConfigDir },
           });
 
       proc.stdout.setEncoding('utf8');

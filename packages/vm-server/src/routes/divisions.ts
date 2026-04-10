@@ -125,6 +125,11 @@ export async function divisionRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
     const { id } = req.body as { id: string };
+    const child = await q1('SELECT id FROM workspaces WHERE division_id = ? LIMIT 1', [id]);
+    if (child) {
+      reply.code(409);
+      return { ok: false, error: '하위 실(워크스페이스)이 존재합니다. 먼저 하위 조직을 삭제해주세요.' };
+    }
     await exec('DELETE FROM divisions WHERE id = ? AND org_id = ?', [id, user.orgId]);
     return { ok: true };
   });

@@ -16,9 +16,5 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const id = new URL(req.url).searchParams.get('id');
-  return proxyBodyToVm(
-    new Request(req, { body: JSON.stringify({ id }) }) as NextRequest,
-    '/api/teams',
-    'DELETE'
-  );
+  return proxyBodyToVm(req, '/api/teams', 'DELETE', { id });
 }

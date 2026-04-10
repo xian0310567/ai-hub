@@ -54,14 +54,15 @@ export async function proxyToVm(
   return res;
 }
 
-/** POST/PATCH body를 포함한 프록시 */
+/** POST/PATCH/DELETE body를 포함한 프록시 */
 export async function proxyBodyToVm(
   req: NextRequest,
   path: string,
-  method: string
+  method: string,
+  overrideBody?: unknown
 ): Promise<NextResponse> {
   const cookie = getVmCookie(req);
-  const body = await req.json().catch(() => ({}));
+  const body = overrideBody ?? await req.json().catch(() => ({}));
 
   const vmRes = await fetch(`${VM_URL}${path}`, {
     method,

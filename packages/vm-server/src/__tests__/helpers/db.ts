@@ -54,6 +54,7 @@ const DELETE_ORDER = [
   'notifications',
   'team_members',
   'parts',
+  'openclaw_channels',
   'openclaw_configs',
   'agents',
   'hosts',

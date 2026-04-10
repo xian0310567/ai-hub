@@ -16,6 +16,7 @@ import { partRoutes } from './routes/parts.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { backupRoutes } from './routes/backup.js';
 import { openclawRoutes } from './routes/openclaw.js';
+import { openclawChannelRoutes } from './routes/openclaw-channels.js';
 import { startFallbackDaemon } from './workers/fallback.js';
 import { startScheduler } from './workers/scheduler.js';
 import { startPgBackup } from './workers/pg-backup.js';
@@ -51,7 +52,8 @@ await app.register(auditRoutes,     { prefix: '/api/audit' });
 await app.register(partRoutes,      { prefix: '/api/parts' });
 await app.register(webhookRoutes,   { prefix: '/api/webhooks' });
 await app.register(backupRoutes,    { prefix: '/api/backup' });
-await app.register(openclawRoutes,  { prefix: '/api/openclaw' });
+await app.register(openclawRoutes,         { prefix: '/api/openclaw' });
+await app.register(openclawChannelRoutes,  { prefix: '/api/openclaw/channels' });
 
 try {
   // DB 스키마 초기화 (PostgreSQL)

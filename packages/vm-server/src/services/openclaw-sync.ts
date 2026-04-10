@@ -70,6 +70,20 @@ interface OpenClawBinding {
   match: { channel: string };
 }
 
+/** DB 채널 설정 */
+interface DbChannel {
+  id: string;
+  org_id: string;
+  channel_type: string;
+  config: string;
+  enabled: boolean;
+}
+
+/** OpenClaw 채널 설정 */
+interface OpenClawChannelConfig {
+  [channelType: string]: Record<string, unknown>;
+}
+
 /** 생성된 OpenClaw 설정 */
 export interface GeneratedOpenClawConfig {
   agents: {
@@ -80,6 +94,7 @@ export interface GeneratedOpenClawConfig {
     list: OpenClawAgentEntry[];
   };
   bindings: OpenClawBinding[];
+  channels?: OpenClawChannelConfig;
   session?: { mode: string; ttl: string };
 }
 
@@ -257,6 +272,25 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
   // 오케스트레이터의 subagents를 팀 리스트로 업데이트
   agentList[0].subagents = { allowAgents: allTeamIds.length > 0 ? allTeamIds : ['*'] };
 
+  // 채널 설정 로드
+  const channels = await qall<DbChannel>(
+    'SELECT * FROM openclaw_channels WHERE org_id = ? AND enabled = TRUE', [orgId],
+  );
+
+  const channelConfig: OpenClawChannelConfig = {};
+  const bindings: OpenClawBinding[] = [
+    { agentId: orchestratorId, match: { channel: 'web' } },
+  ];
+
+  for (const ch of channels) {
+    try {
+      const cfg = JSON.parse(ch.config);
+      channelConfig[ch.channel_type] = cfg;
+      // 각 채널도 오케스트레이터로 라우팅
+      bindings.push({ agentId: orchestratorId, match: { channel: ch.channel_type } });
+    } catch {}
+  }
+
   return {
     agents: {
       defaults: {
@@ -265,9 +299,8 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
       },
       list: agentList,
     },
-    bindings: [
-      { agentId: orchestratorId, match: { channel: 'web' } },
-    ],
+    bindings,
+    ...(Object.keys(channelConfig).length > 0 ? { channels: channelConfig } : {}),
     session: {
       mode: 'per-agent',
       ttl: '24h',

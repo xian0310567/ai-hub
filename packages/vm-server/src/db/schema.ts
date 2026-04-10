@@ -262,6 +262,17 @@ export async function initSchema(): Promise<void> {
       value TEXT NOT NULL
     )`,
 
+    // ── OpenClaw 채널 설정 ────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS openclaw_channels (
+      id           TEXT PRIMARY KEY,
+      org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      channel_type TEXT NOT NULL,
+      config       TEXT NOT NULL DEFAULT '{}',
+      enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at   BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+      UNIQUE(org_id, channel_type)
+    )`,
+
     // ── OpenClaw 워크스페이스 설정 (DB 기반 동적 생성) ──────────────────
     `CREATE TABLE IF NOT EXISTS openclaw_configs (
       id           TEXT PRIMARY KEY,

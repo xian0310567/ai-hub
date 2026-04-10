@@ -85,6 +85,13 @@ interface VmDivision  { id: string; name: string; ws_path: string }
 interface VmTeam      { id: string; name: string; workspace_id: string }
 interface VmAgent     { id: string; command_name?: string; org_level?: string; is_lead: number }
 
+/** 하네스 변경 후 OpenClaw 워크스페이스 동기화를 트리거한다 (비동기/백그라운드). */
+function triggerOpenClawSync(cookie: string): void {
+  vmPost('/api/openclaw/sync', cookie, {}).catch(() => {
+    // 동기화 실패는 무시 — 에이전트 생성 자체는 이미 성공
+  });
+}
+
 async function getWsPath(
   orgId: string,
   orgType: 'division' | 'department' | 'team',
@@ -285,6 +292,9 @@ export async function PATCH(req: NextRequest) {
       await vmPatch(patchEp, cookie, { id: org_id, harness_prompt: task });
     }
 
+    // OpenClaw 워크스페이스 동기화 (백그라운드)
+    triggerOpenClawSync(cookie);
+
     return Response.json({ ok: true, created: [name] });
   }
 
@@ -363,6 +373,9 @@ ${soul}
 
   // harness_prompt 저장
   if (task) await vmPatch('/api/teams', cookie, { id: org_id, harness_prompt: task });
+
+  // OpenClaw 워크스페이스 동기화 (백그라운드)
+  triggerOpenClawSync(cookie);
 
   return Response.json({ ok: true, created });
 }

@@ -261,6 +261,17 @@ export async function initSchema(): Promise<void> {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`,
+
+    // ── OpenClaw 워크스페이스 설정 (DB 기반 동적 생성) ──────────────────
+    `CREATE TABLE IF NOT EXISTS openclaw_configs (
+      id           TEXT PRIMARY KEY,
+      org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      config       TEXT NOT NULL DEFAULT '{}',
+      runtime_dir  TEXT NOT NULL DEFAULT '',
+      version      INTEGER NOT NULL DEFAULT 1,
+      updated_at   BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+      UNIQUE(org_id)
+    )`,
   ];
 
   for (const ddl of tables) {

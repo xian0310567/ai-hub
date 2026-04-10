@@ -27,12 +27,13 @@ db.exec(`
 
   -- 개인 대화 기록 (agent_id는 vm-server의 agents.id를 참조)
   CREATE TABLE IF NOT EXISTS chat_logs (
-    id         TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL,
-    agent_id   TEXT NOT NULL,
-    role       TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    agent_id    TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    session_key TEXT,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
   -- 개인 알림
@@ -128,6 +129,7 @@ try { db.exec("ALTER TABLE missions ADD COLUMN origin TEXT NOT NULL DEFAULT 'use
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAULT 'auto'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
+try { db.exec("ALTER TABLE chat_logs ADD COLUMN session_key TEXT"); } catch {}
 
 // 서버 재시작 시 stuck 잡 정리 (핫 리로드 시 중복 실행 방지)
 if (!globalDb.__localDbInitDone) {
@@ -149,9 +151,28 @@ export const ChatLogs = {
   list:  (userId: string, agentId: string, limit = 100) =>
     db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? ORDER BY created_at DESC LIMIT ?').all(userId, agentId, limit).reverse() as ChatLog[],
   add:   (log: Omit<ChatLog, 'created_at'>) =>
-    db.prepare('INSERT INTO chat_logs(id,user_id,agent_id,role,content) VALUES(?,?,?,?,?)').run(log.id, log.user_id, log.agent_id, log.role, log.content),
+    db.prepare('INSERT INTO chat_logs(id,user_id,agent_id,role,content,session_key) VALUES(?,?,?,?,?,?)').run(log.id, log.user_id, log.agent_id, log.role, log.content, log.session_key ?? null),
   clear: (userId: string, agentId: string) =>
     db.prepare('DELETE FROM chat_logs WHERE user_id=? AND agent_id=?').run(userId, agentId),
+
+  /** 사용자의 세션 목록 (agent별 최신 대화 그룹) */
+  sessions: (userId: string, limit = 50) =>
+    db.prepare(`
+      SELECT agent_id, session_key, MAX(created_at) as last_at, COUNT(*) as msg_count
+      FROM chat_logs WHERE user_id=?
+      GROUP BY agent_id, session_key
+      ORDER BY last_at DESC LIMIT ?
+    `).all(userId, limit) as ChatSession[],
+
+  /** 특정 세션의 메시지 조회 */
+  sessionMessages: (userId: string, agentId: string, sessionKey?: string, limit = 200) => {
+    if (sessionKey) {
+      return db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? AND session_key=? ORDER BY created_at ASC LIMIT ?')
+        .all(userId, agentId, sessionKey, limit) as ChatLog[];
+    }
+    return db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? ORDER BY created_at ASC LIMIT ?')
+      .all(userId, agentId, limit) as ChatLog[];
+  },
 };
 
 export const Notifications = {
@@ -235,7 +256,10 @@ export const MissionSchedules = {
 // ── 인터페이스 ────────────────────────────────────────────────────────
 
 export interface ChatLog {
-  id: string; user_id: string; agent_id: string; role: string; content: string; created_at?: number;
+  id: string; user_id: string; agent_id: string; role: string; content: string; session_key?: string; created_at?: number;
+}
+export interface ChatSession {
+  agent_id: string; session_key: string | null; last_at: number; msg_count: number;
 }
 export interface Notification {
   id: string; user_id: string; type: string; title: string; message: string; read: number; created_at?: number;

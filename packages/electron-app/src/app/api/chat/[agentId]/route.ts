@@ -149,7 +149,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ age
 
   if (!body.message) return Response.json({ ok: false, error: 'message required' }, { status: 400 });
 
-  ChatLogs.add({ id: randomUUID(), user_id: user.id, agent_id: agentId, role: 'user', content: body.message });
+  const sessionKey = body.sessionKey || `${user.id}:${agentId}`;
+
+  ChatLogs.add({ id: randomUUID(), user_id: user.id, agent_id: agentId, role: 'user', content: body.message, session_key: sessionKey });
 
   const cookie = getVmSessionCookie(req);
   const agent = await fetchAgent(agentId, cookie);
@@ -196,7 +198,7 @@ function respondViaGateway(
         fullText += decoder.decode(value, { stream: true });
       }
       if (fullText.trim()) {
-        ChatLogs.add({ id: randomUUID(), user_id: userId, agent_id: agentId, role: 'assistant', content: fullText.trim() });
+        ChatLogs.add({ id: randomUUID(), user_id: userId, agent_id: agentId, role: 'assistant', content: fullText.trim(), session_key: key });
       }
     } catch {}
   })();

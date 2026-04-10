@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation';
 import { drawSprite } from '@/lib/sprites';
 import OpenClawStatus from '@/components/OpenClawStatus';
+import SessionHistory from '@/components/SessionHistory';
 
 // ── Types ───────────────────────────────────────────────────────────
 interface Agent { id:string; name:string; emoji:string; color:string; command_name:string|null; is_lead:number; org_level:string; harness_pattern:string; model:string; soul:string; }
@@ -37,6 +38,7 @@ export default function Dashboard() {
   const [selectedAgent, setSelectedAgent] = useState<Agent|null>(null);
   const [authStatus, setAuthStatus] = useState<{loggedIn:boolean}|null>(null);
   const [loginModal, setLoginModal] = useState(false);
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
 
   // 미션 상태 (다중 미션 지원)
   const [missions, setMissions] = useState<MissionItem[]>([]);
@@ -465,6 +467,8 @@ export default function Dashboard() {
         <a href="/vault" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>🔐 Vault</a>
         <a href="/settings" style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>⚙️ 설정</a>
 
+        <button onClick={()=>setSessionHistoryOpen(true)} style={{fontSize:12,fontWeight:500,color:'var(--text-secondary)',textDecoration:'none',padding:'4px 10px',border:'1px solid var(--border)',borderRadius:4,transition:'all .12s',background:'none',cursor:'pointer',fontFamily:'inherit'}} onMouseOver={e=>{e.currentTarget.style.color='var(--text-primary)';e.currentTarget.style.borderColor='#555';}} onMouseOut={e=>{e.currentTarget.style.color='var(--text-secondary)';e.currentTarget.style.borderColor='var(--border)';}}>히스토리</button>
+
         {/* 🔔 알림 벨 */}
         <div ref={notifRef} style={{position:'relative'}} suppressHydrationWarning>
           <button onClick={()=>setNotifOpen(v=>!v)} style={{position:'relative',background:'none',border:'1px solid var(--border)',borderRadius:4,color:'var(--text-secondary)',fontSize:14,padding:'4px 10px',cursor:'pointer',lineHeight:1,transition:'all .12s'}}
@@ -858,6 +862,9 @@ export default function Dashboard() {
         </div>
       )}
 
+
+      {/* ── 세션 히스토리 ── */}
+      {sessionHistoryOpen && <SessionHistory onClose={()=>setSessionHistoryOpen(false)} />}
 
       {/* ── OpenClaw 상태 위젯 ── */}
       <OpenClawStatus />

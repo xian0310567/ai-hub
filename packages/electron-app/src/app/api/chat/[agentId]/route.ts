@@ -200,7 +200,11 @@ function respondViaGateway(
       if (fullText.trim()) {
         ChatLogs.add({ id: randomUUID(), user_id: userId, agent_id: agentId, role: 'assistant', content: fullText.trim(), session_key: key });
       }
-    } catch {}
+    } catch (err) {
+      console.error(`[ChatLog] 대화 기록 저장 실패 (agent=${agentId}):`, err);
+    } finally {
+      reader.releaseLock();
+    }
   })();
 
   return new Response(browserStream, {

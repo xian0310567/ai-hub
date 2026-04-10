@@ -122,14 +122,12 @@ export default function OpenClawStatus() {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(async () => {
-    try {
-      const [statusRes, gwRes] = await Promise.all([
-        fetch('/api/openclaw/status').then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/openclaw/gateway').then(r => r.ok ? r.json() : null).catch(() => null),
-      ]);
-      if (statusRes) setStatus(statusRes);
-      if (gwRes) setGatewayInfo(gwRes);
-    } catch {}
+    const [statusResult, gwResult] = await Promise.allSettled([
+      fetch('/api/openclaw/status').then(r => r.ok ? r.json() : null),
+      fetch('/api/openclaw/gateway').then(r => r.ok ? r.json() : null),
+    ]);
+    if (statusResult.status === 'fulfilled' && statusResult.value) setStatus(statusResult.value);
+    if (gwResult.status === 'fulfilled' && gwResult.value) setGatewayInfo(gwResult.value);
   }, []);
 
   // 초기 로드 + 폴링

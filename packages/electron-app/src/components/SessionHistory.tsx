@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────────
 interface ChatSession {
@@ -127,6 +127,7 @@ export default function SessionHistory({
   const loadMessages = useCallback(async (agentId: string, sessionKey: string) => {
     setLoading(true);
     setSelected({ agentId, sessionKey });
+    setMessages([]);  // 이전 메시지 즉시 클리어
     try {
       const r = await fetch(`/api/sessions?agent_id=${encodeURIComponent(agentId)}&session_key=${encodeURIComponent(sessionKey)}`);
       const d = await r.json();
@@ -140,14 +141,14 @@ export default function SessionHistory({
     msgEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const agentMap = useMemo(() => new Map(agents.map(a => [a.id, a])), [agents]);
+
   const getAgentName = (agentId: string) => {
-    const agent = agents.find(a => a.id === agentId);
-    return agent?.name ?? agentId.slice(0, 8);
+    return agentMap.get(agentId)?.name ?? agentId.slice(0, 8);
   };
 
   const getAgentEmoji = (agentId: string) => {
-    const agent = agents.find(a => a.id === agentId);
-    return agent?.emoji ?? '🤖';
+    return agentMap.get(agentId)?.emoji ?? '🤖';
   };
 
   const formatTime = (ts: number) => {

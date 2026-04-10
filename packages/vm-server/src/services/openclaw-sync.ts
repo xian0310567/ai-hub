@@ -196,6 +196,16 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
   const agentList: OpenClawAgentEntry[] = [];
   const allTeamIds: string[] = [];
 
+  // agentId 충돌 방지 (예: "Dev-Team"과 "Dev Team" 모두 "dev-team"으로 변환됨)
+  const usedIds = new Set<string>();
+  function uniqueAgentId(commandName: string | null, name: string): string {
+    let id = toAgentId(commandName, name);
+    let suffix = 2;
+    while (usedIds.has(id)) { id = `${toAgentId(commandName, name)}-${suffix++}`; }
+    usedIds.add(id);
+    return id;
+  }
+
   // 1) 오케스트레이터 (CEO) — 조직 리더가 있으면 사용, 없으면 자동 생성
   const orchestratorId = 'orchestrator';
   const primaryLeader = leaders[0];
@@ -220,7 +230,7 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
     const team = teamMap.get(teamId);
     if (!team) continue;
 
-    const teamAgentId = toAgentId(null, team.name);
+    const teamAgentId = uniqueAgentId(null, team.name);
     allTeamIds.push(teamAgentId);
 
     const teamLead = teamAgents.find(a => a.team_id === teamId && a.is_lead);
@@ -234,14 +244,14 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
       subagents: {
         allowAgents: members
           .filter(a => !a.is_lead)
-          .map(a => toAgentId(a.command_name, a.name)),
+          .map(a => uniqueAgentId(a.command_name, a.name)),
       },
     });
 
     // 팀 하위 에이전트들
     for (const member of members) {
       if (member.is_lead) continue; // 리드는 이미 팀 대표로 등록됨
-      const memberId = toAgentId(member.command_name, member.name);
+      const memberId = uniqueAgentId(member.command_name, member.name);
 
       agentList.push({
         id: memberId,
@@ -258,7 +268,7 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
     a => !a.team_id && a.org_level === 'worker',
   );
   for (const agent of standaloneAgents) {
-    const agentId = toAgentId(agent.command_name, agent.name);
+    const agentId = uniqueAgentId(agent.command_name, agent.name);
     allTeamIds.push(agentId);
 
     agentList.push({
@@ -288,7 +298,10 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
       channelConfig[ch.channel_type] = cfg;
       // 각 채널도 오케스트레이터로 라우팅
       bindings.push({ agentId: orchestratorId, match: { channel: ch.channel_type } });
-    } catch {}
+    } catch (err) {
+      console.warn(`[OpenClaw Sync] 채널 ${ch.channel_type} config 파싱 실패, 건너뜀:`, err);
+      // binding 추가 안 함 — config 없는 binding은 무의미
+    }
   }
 
   return {
@@ -308,6 +321,10 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
   };
 }
 
+// ── 동시성 제어 ──────────────────────────────────────────────────────
+
+const syncLocks = new Map<string, Promise<void>>();
+
 // ── 런타임 파일 생성 ──────────────────────────────────────────────────
 
 function resolveRuntimeDir(orgId: string): string {
@@ -325,19 +342,48 @@ export async function materializeOpenClawWorkspace(orgId: string): Promise<{
   config: GeneratedOpenClawConfig;
   agentCount: number;
 }> {
+  // org별 sync lock: 이전 sync가 끝날 때까지 대기
+  while (syncLocks.has(orgId)) {
+    await syncLocks.get(orgId);
+  }
+
+  let releaseLock: () => void;
+  syncLocks.set(orgId, new Promise(r => { releaseLock = r; }));
+
+  try {
+    return await _materializeOpenClawWorkspaceInner(orgId);
+  } finally {
+    syncLocks.delete(orgId);
+    releaseLock!();
+  }
+}
+
+async function _materializeOpenClawWorkspaceInner(orgId: string): Promise<{
+  runtimeDir: string;
+  config: GeneratedOpenClawConfig;
+  agentCount: number;
+}> {
   const config = await generateOpenClawConfig(orgId);
   const runtimeDir = resolveRuntimeDir(orgId);
 
   // 런타임 디렉토리 초기화
-  fs.rmSync(runtimeDir, { recursive: true, force: true });
-  fs.mkdirSync(runtimeDir, { recursive: true });
+  try {
+    fs.rmSync(runtimeDir, { recursive: true, force: true });
+    fs.mkdirSync(runtimeDir, { recursive: true });
+  } catch (err) {
+    throw new Error(`[OpenClaw Sync] 런타임 디렉토리 초기화 실패 (${runtimeDir}): ${err instanceof Error ? err.message : err}`);
+  }
 
   // openclaw.json 기록
-  fs.writeFileSync(
-    path.join(runtimeDir, 'openclaw.json'),
-    JSON.stringify(config, null, 2),
-    'utf8',
-  );
+  try {
+    fs.writeFileSync(
+      path.join(runtimeDir, 'openclaw.json'),
+      JSON.stringify(config, null, 2),
+      'utf8',
+    );
+  } catch (err) {
+    throw new Error(`[OpenClaw Sync] openclaw.json 기록 실패: ${err instanceof Error ? err.message : err}`);
+  }
 
   // 에이전트별 워크스페이스 파일 생성
   const agents = await qall<DbAgent>(

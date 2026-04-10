@@ -54,6 +54,7 @@ const DELETE_ORDER = [
   'notifications',
   'team_members',
   'parts',
+  'openclaw_configs',
   'agents',
   'hosts',
   'teams',
@@ -123,12 +124,12 @@ export async function seedUser(opts: {
     [newId(), orgRow.id, user.id, role],
   );
 
-  // Session (30 days)
+  // Session (30 days, with org_id for auth)
   const sessionId = newId();
   const expiresAt = Math.floor(Date.now() / 1000) + 86400 * 30;
   await pool.query(
-    'INSERT INTO sessions(id,user_id,expires_at) VALUES($1,$2,$3)',
-    [sessionId, user.id, expiresAt],
+    'INSERT INTO sessions(id,user_id,org_id,expires_at) VALUES($1,$2,$3,$4)',
+    [sessionId, user.id, orgRow.id, expiresAt],
   );
 
   return {

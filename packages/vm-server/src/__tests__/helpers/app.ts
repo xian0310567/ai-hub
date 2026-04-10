@@ -18,6 +18,7 @@ import { taskRoutes } from '../../routes/tasks.js';
 import { vaultRoutes } from '../../routes/vaults.js';
 import { auditRoutes } from '../../routes/audit.js';
 import { partRoutes } from '../../routes/parts.js';
+import { openclawRoutes } from '../../routes/openclaw.js';
 
 let dbInitialised = false;
 
@@ -44,6 +45,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(vaultRoutes,     { prefix: '/api/vaults' });
   await app.register(auditRoutes,     { prefix: '/api/audit' });
   await app.register(partRoutes,      { prefix: '/api/parts' });
+  await app.register(openclawRoutes,  { prefix: '/api/openclaw' });
 
   await app.ready();
   return app;

@@ -16,10 +16,10 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
   }
 
   const row = await q1<{ user_id: string; username: string; org_id: string; role: string }>(`
-    SELECT s.user_id, u.username, om.org_id, om.role
+    SELECT s.user_id, u.username, s.org_id, om.role
     FROM sessions s
     JOIN users u ON s.user_id = u.id
-    LEFT JOIN org_members om ON om.user_id = u.id
+    JOIN org_members om ON om.user_id = u.id AND om.org_id = s.org_id
     WHERE s.id = ? AND s.expires_at > ?
     LIMIT 1
   `, [sessionId, now()]);
@@ -30,7 +30,7 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
   }
 
   if (!row.org_id) {
-    reply.code(403).send({ error: 'No organization membership. Contact your admin.' });
+    reply.code(403).send({ error: '워크스페이스가 지정되지 않은 세션입니다. 다시 로그인해주세요.' });
     throw new Error('No org');
   }
 

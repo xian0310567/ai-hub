@@ -22,17 +22,18 @@ export async function initSchema(): Promise<void> {
       created_at    BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
     )`,
 
-    `CREATE TABLE IF NOT EXISTS sessions (
-      id         TEXT PRIMARY KEY,
-      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at BIGINT NOT NULL,
-      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
-    )`,
-
     `CREATE TABLE IF NOT EXISTS organizations (
       id         TEXT PRIMARY KEY,
       name       TEXT NOT NULL,
       slug       TEXT UNIQUE NOT NULL,
+      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS sessions (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      org_id     TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+      expires_at BIGINT NOT NULL,
       created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
     )`,
 

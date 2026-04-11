@@ -6,6 +6,8 @@
  */
 
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
+import path from 'path';
 import { EventEmitter } from 'events';
 import { isGatewayAvailable } from './openclaw-client';
 
@@ -57,17 +59,47 @@ export function clearLogBuffer(): void {
 const GATEWAY_PORT = process.env.OPENCLAW_GATEWAY_PORT || '18789';
 const GATEWAY_BIND = process.env.OPENCLAW_GATEWAY_BIND || 'loopback';
 
+/** 빌드 상태 추적: 로컬 패키지가 있지만 빌드되지 않은 경우 */
+let _needsBuild = false;
+export function isOpenClawNeedsBuild(): boolean { return _needsBuild; }
+
 /** OpenClaw CLI 바이너리 경로를 탐지한다. */
 function findOpenClawBinary(): string | null {
+  _needsBuild = false;
+
+  // 1. 환경변수로 직접 지정
   const envPath = process.env.OPENCLAW_CLI_PATH;
   if (envPath) return envPath;
 
+  // 2. 로컬 모노레포 워크스페이스 패키지 (packages/openclaw)
+  //    electron-app의 cwd는 packages/electron-app이므로 ../openclaw로 접근
+  const localCandidates = [
+    path.resolve(process.cwd(), '..', 'openclaw'),                        // packages/openclaw
+    path.resolve(process.cwd(), '..', '..', 'packages', 'openclaw'),      // 프로젝트 루트에서
+  ];
+  for (const localDir of localCandidates) {
+    const mjs = path.join(localDir, 'openclaw.mjs');
+    if (existsSync(mjs)) {
+      // dist가 빌드되어 있는지 확인
+      const hasDistJs = existsSync(path.join(localDir, 'dist', 'entry.js'));
+      const hasDistMjs = existsSync(path.join(localDir, 'dist', 'entry.mjs'));
+      if (hasDistJs || hasDistMjs) {
+        console.log(`[Gateway] 로컬 OpenClaw 패키지 사용: ${mjs}`);
+        return mjs;
+      }
+      // dist가 없으면 빌드 필요
+      _needsBuild = true;
+      console.warn(`[Gateway] 로컬 OpenClaw 패키지 발견: ${localDir} (빌드 필요: pnpm --filter openclaw build)`);
+      return null;
+    }
+  }
+
+  // 3. 시스템 PATH에서 탐색
   try {
     return execSync('which openclaw', { encoding: 'utf8', timeout: 3000 }).trim() || null;
   } catch {
-    // PATH에 없는 경우 npm global 경로 탐색
+    // 4. 글로벌 설치 경로 탐색
     const candidates = [
-      'openclaw',
       `${process.env.HOME}/.npm-global/bin/openclaw`,
       `${process.env.HOME}/.local/bin/openclaw`,
       '/usr/local/bin/openclaw',
@@ -119,8 +151,8 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
   const binary = findOpenClawBinary();
   if (!binary) {
     _state = 'error';
-    _lastError = 'openclaw_not_found';
-    return { ok: false, reason: 'openclaw_not_found' };
+    _lastError = _needsBuild ? 'openclaw_not_built' : 'openclaw_not_found';
+    return { ok: false, reason: _lastError };
   }
 
   _state = 'starting';
@@ -212,6 +244,7 @@ export async function getGatewayInfo(): Promise<{
   available: boolean;
   port: string;
   lastError: string | null;
+  needsBuild: boolean;
 }> {
   const available = await isGatewayAvailable();
   if (available && _state !== 'running') {
@@ -227,6 +260,7 @@ export async function getGatewayInfo(): Promise<{
     available,
     port: GATEWAY_PORT,
     lastError: _lastError,
+    needsBuild: _needsBuild,
   };
 }
 

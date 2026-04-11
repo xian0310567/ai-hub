@@ -11,6 +11,7 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import { isGatewayAvailable } from './openclaw-client';
 import { readConfig } from './openclaw-config';
+import { CLAUDE_CLI } from './claude-cli';
 
 // ── 상태 ──────────────────────────────────────────────────────────────
 
@@ -186,6 +187,9 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
         PATH: process.env.PATH,
         HOME: process.env.HOME,
         // ANTHROPIC_API_KEY: 제거 — claude-cli 백엔드는 자체 인증 사용
+        // claude CLI 백엔드 활성화 + 바이너리 경로 전달.
+        OPENCLAW_ANTHROPIC_BACKEND: 'cli',
+        CLAUDE_CLI_PATH: CLAUDE_CLI,
         OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
         OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
         OPENCLAW_CONFIG_DIR: process.env.OPENCLAW_CONFIG_DIR,

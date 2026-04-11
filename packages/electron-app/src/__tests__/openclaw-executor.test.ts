@@ -30,6 +30,13 @@ vi.mock('../lib/openclaw-client.js', () => ({
   isGatewayReady: mockGatewayReady,
 }));
 
+// claude CLI 폴백 경로 — 실제 바이너리 탐색을 우회한다.
+vi.mock('../lib/claude-cli.js', () => ({
+  CLAUDE_CLI: '/usr/local/bin/claude',
+  CLAUDE_ENV: { PATH: '/usr/local/bin:/usr/bin' },
+  claudeSpawnError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
+}));
+
 // ── Import after mocks ──────────────────────────────────────────────
 
 import {
@@ -174,52 +181,62 @@ describe('agentRun', () => {
     );
   });
 
-  it('falls back to CLI when Gateway unavailable', async () => {
+  it('falls back to claude CLI when Gateway unavailable', async () => {
     mockGatewayReady.mockResolvedValue(false);
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"CLI 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: 'CLI 결과' });
 
     const result = await agentRun({ message: '테스트', timeout: 60 });
 
     expect(result).toEqual({ ok: true, output: 'CLI 결과' });
     expect(mockExecFile).toHaveBeenCalledWith(
-      '/usr/local/bin/openclaw',
-      ['agent', '-m', '테스트', '--json', '--timeout', '60'],
-      expect.objectContaining({ timeout: 70_000 }),
+      '/usr/local/bin/claude',
+      ['-p', '테스트'],
+      expect.objectContaining({ timeout: 70_000, env: expect.any(Object) }),
     );
   });
 
-  it('falls back to CLI when Gateway request throws', async () => {
+  it('falls back to claude CLI when Gateway request throws', async () => {
     mockGatewayReady.mockResolvedValue(true);
     mockFetch.mockRejectedValueOnce(new Error('Gateway timeout'));
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"폴백 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: '폴백 결과' });
 
     const result = await agentRun({ message: '테스트' });
     expect(result).toEqual({ ok: true, output: '폴백 결과' });
   });
 
-  it('falls back to CLI when Gateway returns 500', async () => {
+  it('falls back to claude CLI when Gateway returns 500', async () => {
     mockGatewayReady.mockResolvedValue(true);
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
       text: async () => 'Internal Server Error',
     });
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"CLI 폴백 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: 'CLI 폴백 결과' });
 
     const result = await agentRun({ message: '테스트' });
     expect(result).toEqual({ ok: true, output: 'CLI 폴백 결과' });
   });
 
-  it('returns error when both Gateway and CLI fail', async () => {
+  it('passes --model to claude CLI when model is provided', async () => {
     mockGatewayReady.mockResolvedValue(false);
-    mockFindBinary.mockReturnValue(null);
+    mockExecFile.mockResolvedValueOnce({ stdout: 'ok' });
+
+    await agentRun({ message: '테스트', model: 'claude-sonnet-4-6' });
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      '/usr/local/bin/claude',
+      ['-p', '테스트', '--model', 'claude-sonnet-4-6'],
+      expect.any(Object),
+    );
+  });
+
+  it('returns an error when claude CLI fails', async () => {
+    mockGatewayReady.mockResolvedValue(false);
+    mockExecFile.mockRejectedValueOnce(new Error('ETIMEDOUT'));
 
     const result = await agentRun({ message: '테스트' });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe('openclaw_not_found');
+    expect(result.error).toContain('ETIMEDOUT');
   });
 });
 

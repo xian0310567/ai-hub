@@ -15,6 +15,11 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
+import {
+  isCliBinaryAvailable,
+  spawnClaudeProcess,
+} from "./claude-cli-transport.js";
+import { parseCliStream } from "./claude-cli-stream-adapter.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -592,11 +597,114 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
+/** CLI 백엔드 모드인지 판단한다. provider가 claude-cli이거나 환경변수가 cli일 때 활성. */
+function isCliBackendMode(model: AnthropicTransportModel): boolean {
+  if (process.env.OPENCLAW_ANTHROPIC_BACKEND === "cli") return true;
+  const provider = normalizeLowercaseStringOrEmpty(model.provider);
+  if (provider === "claude-cli") return true;
+  return false;
+}
+
+/**
+ * context.messages에서 마지막 사용자 발화를 평탄화된 문자열로 추출한다.
+ * Claude CLI는 단일 prompt 인자만 받으므로 멀티턴/툴 라운드트립은
+ * `--resume` 경로에서 별도로 다룬다.
+ */
+function extractCliPrompt(context: Context): string {
+  for (let i = context.messages.length - 1; i >= 0; i -= 1) {
+    const msg = context.messages[i];
+    if (msg.role !== "user") continue;
+    if (typeof msg.content === "string") return msg.content;
+    if (Array.isArray(msg.content)) {
+      const parts: string[] = [];
+      for (const item of msg.content) {
+        if (item && typeof item === "object" && "text" in item && typeof (item as { text: unknown }).text === "string") {
+          parts.push((item as { text: string }).text);
+        }
+      }
+      if (parts.length > 0) return parts.join("\n");
+    }
+  }
+  return "";
+}
+
+function extractCliTools(context: Context): string[] {
+  if (!context.tools || context.tools.length === 0) return [];
+  const out: string[] = [];
+  for (const tool of context.tools) {
+    if (!tool || typeof tool !== "object") continue;
+    const name = (tool as { name?: unknown }).name;
+    if (typeof name !== "string" || name.length === 0) continue;
+    const canonical = CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name));
+    out.push(canonical ?? name);
+  }
+  return out;
+}
+
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
+
+    // CLI 백엔드 모드: claude 바이너리를 spawn하여 구독제 인증으로 추론한다.
+    // 폴백은 기존 SDK 경로 — 바이너리 미가용/실패 시 자연스럽게 throw되며
+    // 호출 측이 별도 폴백 로직을 가질 수 있다.
+    if (isCliBackendMode(model) && isCliBinaryAvailable()) {
+      const cliOutput: MutableAssistantOutput = {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: model.provider,
+        model: model.id,
+        usage: createEmptyTransportUsage(),
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      void (async () => {
+        try {
+          const prompt = extractCliPrompt(context);
+          if (!prompt) {
+            throw new Error("CLI 백엔드: 사용자 프롬프트가 비어있습니다");
+          }
+          const tools = extractCliTools(context);
+          const systemPrompt =
+            typeof context.systemPrompt === "string" && context.systemPrompt.length > 0
+              ? sanitizeTransportPayloadText(context.systemPrompt)
+              : undefined;
+
+          const { process: proc } = spawnClaudeProcess({
+            prompt: sanitizeTransportPayloadText(prompt),
+            modelId: model.id,
+            systemPrompt,
+            tools: tools.length > 0 ? tools : undefined,
+            sessionId: options?.sessionId,
+            options: {
+              timeoutMs: 300_000,
+              signal: options?.signal,
+            },
+          });
+
+          for await (const event of parseCliStream(proc, {
+            provider: model.provider,
+            model: model.id,
+          })) {
+            stream.push(event);
+          }
+          // parseCliStream은 done 이벤트를 직접 발행하므로 stream.end만 호출.
+          stream.end();
+        } catch (error) {
+          failTransportStream({
+            stream,
+            output: cliOutput,
+            signal: options?.signal,
+            error,
+          });
+        }
+      })();
+      return eventStream as ReturnType<StreamFn>;
+    }
+
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant",

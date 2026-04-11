@@ -266,6 +266,29 @@ PORT=3001        # 외부 포트
 # CLAUDE_DIR=~/.claude  # Claude 설정 디렉터리 (기본값 자동 감지)
 ```
 
+### OpenClaw Gateway: Claude CLI 백엔드 (구독제 인증)
+
+`packages/openclaw`의 Anthropic 추론 경로는 기본적으로 **로컬 `claude` CLI를 spawn**해
+구독 인증으로 동작합니다. setup-token / API key를 거치는 경로는 폐기됐거나 토큰당 과금이
+발생하므로, AI Hub electron-app은 Gateway를 띄울 때 다음 환경변수를 자동으로 전달합니다.
+
+```env
+# packages/openclaw/.env (또는 ~/.openclaw/.env)
+OPENCLAW_ANTHROPIC_BACKEND=cli
+# CLAUDE_CLI_PATH=/usr/local/bin/claude   # 선택 — 미설정 시 자동 탐색
+```
+
+사전 준비:
+
+1. `npm i -g @anthropic-ai/claude-code` 로 `claude` CLI 설치
+2. 한 번만 `claude auth login` 실행 (Pro/Max 구독 계정으로 로그인)
+3. AI Hub 또는 OpenClaw Gateway 재시작 — 이후 모든 OpenClaw 기반 미션이
+   `spawn('claude', ['-p', ...])` 경로로 전환되어 API 과금 없이 동작합니다.
+
+CLI 백엔드를 끄고 기존 SDK 경로(API key 과금)를 쓰려면 `OPENCLAW_ANTHROPIC_BACKEND`
+환경변수를 비우거나 `ANTHROPIC_API_KEY` 만 남기세요. 자세한 동기와 설계는
+`docs/openclaw-cli-backend-plan.md`를 참고하세요.
+
 ---
 
 ## 프로젝트 구조

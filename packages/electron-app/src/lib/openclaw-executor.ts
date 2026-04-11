@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { findOpenClawBinary } from './gateway-manager';
 import { isGatewayAvailable, isGatewayReady } from './openclaw-client';
+import { CLAUDE_CLI, CLAUDE_ENV } from './claude-cli';
 
 const execFileAsync = promisify(execFile);
 
@@ -188,23 +189,19 @@ async function agentRunViaGateway(params: AgentRunParams): Promise<AgentResult> 
 }
 
 async function agentRunViaCli(params: AgentRunParams): Promise<AgentResult> {
-  const binary = findOpenClawBinary();
-  if (!binary) return { ok: false, error: 'openclaw_not_found' };
-
-  const args = ['agent', '-m', params.message, '--json'];
-  if (params.agent) args.push('--agent', params.agent);
-  if (params.thinking) args.push('--thinking', params.thinking);
+  // Gateway 미가용 시 폴백: claude 바이너리를 직접 실행해 구독제 인증을 사용한다.
+  // OpenClaw CLI를 한 번 더 거치면 결국 SDK 경로(API 과금)로 귀결되므로 우회한다.
+  const args: string[] = ['-p', params.message];
   if (params.model) args.push('--model', params.model);
-  if (params.timeout) args.push('--timeout', String(params.timeout));
-  if (params.sessionId) args.push('--session', params.sessionId);
 
   try {
-    const { stdout } = await execFileAsync(binary, args, {
+    const { stdout } = await execFileAsync(CLAUDE_CLI, args, {
       encoding: 'utf8',
       timeout: (params.timeout ?? 300) * 1000 + 10_000,
+      env: CLAUDE_ENV,
+      maxBuffer: 10 * 1024 * 1024,
     });
-    const parsed = JSON.parse(stdout);
-    return { ok: true, output: parsed.output ?? parsed.content ?? stdout };
+    return { ok: true, output: stdout.trim() };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

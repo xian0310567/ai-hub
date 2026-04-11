@@ -29,6 +29,14 @@ interface Mission {
   steps: Step[];
   final_doc: string;
   summary?: string;
+  routingMeta?: {
+    needs_clarification?: boolean;
+    clarification?: string;
+    new_org_needed?: string[];
+    is_recurring?: boolean;
+    cron_expr?: string;
+    schedule_name?: string;
+  };
   created_at?: number;
 }
 
@@ -81,11 +89,7 @@ export default function MissionsPage() {
 
   const reload = useCallback(() => {
     fetch('/api/missions').then(r => r.json()).then(d => {
-      if (d.ok) setMissions(d.missions.map((m: any) => ({
-        ...m,
-        routing: JSON.parse(m.routing || '[]'),
-        steps: JSON.parse(m.steps || '[]'),
-      })));
+      if (d.ok) setMissions(d.missions);
       else if (d.error === 'Unauthorized') router.replace('/login');
     });
   }, [router]);
@@ -261,8 +265,16 @@ export default function MissionsPage() {
 
   // SSE 스트림 처리 (run / resume 공통)
   const handleSSEStream = async (missionId: string, endpoint: string) => {
+    let streamCompleted = false;
+
     try {
       const resp = await fetch(endpoint, { method: 'POST' });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        setErr(errData.error || `실행 요청 실패 (${resp.status})`);
+        return;
+      }
+
       const reader = resp.body!.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -287,6 +299,7 @@ export default function MissionsPage() {
                 i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error, job_id: ev.job_id ?? s.job_id } : s
               ));
             } else if (ev.type === 'done') {
+              streamCompleted = true;
               setFinalDoc(ev.final_doc);
               setView('result');
               reload();
@@ -298,14 +311,54 @@ export default function MissionsPage() {
                 }, 2000);
               }
             } else if (ev.type === 'error') {
+              streamCompleted = true;
               setErr(ev.error);
             }
           } catch { /* skip parse errors */ }
         }
       }
-    } catch (e: any) {
-      setErr(`실행 오류: ${e.message}`);
+    } catch {
+      // SSE 연결 끊김 — 백엔드에서 아직 실행 중일 수 있으므로 상태 확인
+      if (!streamCompleted) {
+        await pollMissionUntilSettled(missionId);
+      }
     }
+  };
+
+  // SSE 끊김 시 백엔드 미션 상태를 폴링하여 실제 결과 반영
+  const pollMissionUntilSettled = async (missionId: string) => {
+    setErr('서버 연결이 끊겼습니다. 백그라운드 실행 상태를 확인 중...');
+    const deadline = Date.now() + 5 * 60 * 1000; // 최대 5분 폴링
+
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const res = await fetch(`/api/missions/${missionId}`);
+        if (!res.ok) continue;
+        const d = await res.json();
+        if (!d.ok) continue;
+        const m = d.mission;
+
+        if (m.status === 'done') {
+          setErr('');
+          setSteps(m.steps || []);
+          setFinalDoc(m.final_doc || '');
+          setCurrent(m);
+          setView('result');
+          reload();
+          return;
+        }
+        if (m.status === 'failed') {
+          setErr('미션 실행 실패');
+          setSteps(m.steps || []);
+          reload();
+          return;
+        }
+        // 아직 running — steps 갱신하며 계속 폴링
+        if (m.steps?.length) setSteps(m.steps);
+      } catch { /* 폴링 실패 무시, 재시도 */ }
+    }
+    setErr('백그라운드 실행 상태를 확인할 수 없습니다. 미션 목록에서 결과를 확인하세요.');
   };
 
   // 미션 실행
@@ -471,7 +524,7 @@ export default function MissionsPage() {
               }}
                 onMouseOver={e => e.currentTarget.style.borderColor = '#555'}
                 onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border)'}
-                onClick={() => m.status === 'done' ? viewMission(m) : m.status === 'routed' ? runMission(m) : undefined}
+                onClick={() => m.status === 'done' ? viewMission(m) : m.status === 'routed' ? runMission(m) : m.status === 'needs_clarification' ? (() => { setCurrent(m); setView('routing'); })() : undefined}
               >
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{m.task}</div>
@@ -689,6 +742,41 @@ export default function MissionsPage() {
               </div>
             )}
 
+            {/* 확인 필요 안내 */}
+            {current.status === 'needs_clarification' && (
+              <div style={{ padding: '14px 16px', background: '#f59e0b0a', border: '1px solid #f59e0b40', borderRadius: 6, marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 16 }}>⚠️</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b' }}>확인이 필요합니다</span>
+                </div>
+                {current.routingMeta?.clarification && (
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: 10 }}>
+                    {current.routingMeta.clarification}
+                  </div>
+                )}
+                {current.routingMeta?.new_org_needed && current.routingMeta.new_org_needed.length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+                    권장 조직 생성: {current.routingMeta.new_org_needed.map((org, i) => (
+                      <span key={i} style={{ display: 'inline-block', background: '#f59e0b18', color: '#f59e0b', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600, marginLeft: i > 0 ? 4 : 0 }}>{org}</span>
+                    ))}
+                  </div>
+                )}
+                {current.routing.length > 0 && (
+                  <button
+                    className="nav-btn purple"
+                    style={{ fontSize: 11, padding: '6px 14px' }}
+                    onClick={() => {
+                      fetch(`/api/missions`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: current.id, extra_routing: [] }) })
+                        .then(() => { setCurrent({ ...current, status: 'routed' }); })
+                        .catch(() => setErr('상태 변경 실패'));
+                    }}
+                  >
+                    그래도 실행하기
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* 반복 미션 스케줄 배지 */}
             {(() => {
               try {
@@ -838,9 +926,23 @@ export default function MissionsPage() {
 
             <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
               <button className="modal-btn-cancel" onClick={() => { setView('list'); setCurrent(null); setExpandedSubtasks(new Set()); reload(); }} style={{ flex: 1 }}>취소</button>
-              <button className="modal-btn-ok" onClick={() => runMission(current)} style={{ flex: 2, background: 'var(--success)', borderColor: 'var(--success)' }}>
-                ▶ 미션 실행
-              </button>
+              {current.status !== 'needs_clarification' ? (
+                <button className="modal-btn-ok" onClick={() => runMission(current)} style={{ flex: 2, background: 'var(--success)', borderColor: 'var(--success)' }}>
+                  ▶ 미션 실행
+                </button>
+              ) : current.routing.length > 0 ? (
+                <button className="modal-btn-ok" onClick={() => {
+                  fetch('/api/missions', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: current.id, extra_routing: [] }) })
+                    .then(() => runMission({ ...current, status: 'routed' }))
+                    .catch(() => setErr('상태 변경 실패'));
+                }} style={{ flex: 2, background: '#f59e0b', borderColor: '#f59e0b' }}>
+                  ⚠ 확인 후 실행
+                </button>
+              ) : (
+                <button className="modal-btn-ok" disabled style={{ flex: 2, opacity: 0.4 }}>
+                  배정된 조직 없음
+                </button>
+              )}
             </div>
           </div>
         )}

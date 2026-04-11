@@ -36,9 +36,6 @@ db.exec(`
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
-  CREATE INDEX IF NOT EXISTS idx_chat_logs_user_session
-    ON chat_logs(user_id, agent_id, session_key);
-
   -- 개인 알림
   CREATE TABLE IF NOT EXISTS notifications (
     id         TEXT PRIMARY KEY,
@@ -133,6 +130,9 @@ try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAU
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 try { db.exec("ALTER TABLE chat_logs ADD COLUMN session_key TEXT"); } catch {}
+
+// 마이그레이션 후 session_key 인덱스 생성 (기존 DB에 session_key가 없을 때 db.exec 안에서 실패하는 것 방지)
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_chat_logs_user_session ON chat_logs(user_id, agent_id, session_key)"); } catch {}
 
 // FTS5 가상 테이블 (chat_logs 전문 검색용)
 try {

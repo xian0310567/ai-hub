@@ -22,7 +22,7 @@ let _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 let _restartCount = 0;
 const MAX_RESTARTS = 5;
 const HEALTH_CHECK_INTERVAL_MS = 15_000;
-const STARTUP_TIMEOUT_MS = 10_000;
+const STARTUP_TIMEOUT_MS = 30_000;
 
 // ── 로그 스트리밍 ──────────────────────────────────────────────���─────
 
@@ -131,7 +131,7 @@ export function getRestartCount(): number {
 /**
  * Gateway를 시작한다. 이미 외부에서 실행 중이면 연결만 확인한다.
  */
-export async function startGateway(manual = false): Promise<{ ok: boolean; reason?: string }> {
+export async function startGateway(manual = false): Promise<{ ok: boolean; reason?: string; detail?: string }> {
   // 수동 호출 시 카운터 리셋
   if (manual) _restartCount = 0;
 
@@ -164,8 +164,13 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
       '--bind', GATEWAY_BIND,
       '--port', GATEWAY_PORT,
       '--force',
+      '--allow-unconfigured',
     ];
     if (configDir) args.push('--config', configDir);
+
+    // 프로세스 조기 종료 감지용
+    let processDied = false;
+    let processExitCode: number | null = null;
 
     _process = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -187,29 +192,52 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
     _process.stderr?.on('data', (chunk: Buffer) => pushLog('stderr', chunk));
 
     _process.on('exit', (code) => {
-      _state = 'stopped';
+      processDied = true;
+      processExitCode = code;
       _process = null;
 
-      if (code !== 0 && _restartCount < MAX_RESTARTS) {
-        _restartCount++;
-        setTimeout(() => startGateway(), 2000 * _restartCount);
+      // startGateway 대기 중이 아닐 때만 자동 재시작
+      if (_state === 'running') {
+        _state = 'stopped';
+        if (code !== 0 && _restartCount < MAX_RESTARTS) {
+          _restartCount++;
+          setTimeout(() => startGateway(), 2000 * _restartCount);
+        }
       }
     });
 
     _process.on('error', (err) => {
-      _state = 'error';
+      processDied = true;
       _lastError = err.message || 'process_error';
       _process = null;
     });
 
-    // 시작 대기
-    const started = await waitForGateway(STARTUP_TIMEOUT_MS);
+    // 시작 대기 (프로세스 조기 종료 시 즉시 중단)
+    const started = await waitForGateway(STARTUP_TIMEOUT_MS, () => processDied);
     if (started) {
       _state = 'running';
       _restartCount = 0;
       _lastError = null;
       startHealthCheck();
       return { ok: true };
+    }
+
+    // 프로세스가 이미 죽었으면 실제 에러 메시지 추출
+    if (processDied) {
+      const recentStderr = _logBuffer
+        .filter(l => l.stream === 'stderr')
+        .slice(-5)
+        .map(l => l.line)
+        .join(' ');
+      const recentStdout = _logBuffer
+        .filter(l => l.stream === 'stdout')
+        .slice(-5)
+        .map(l => l.line)
+        .join(' ');
+      const errorDetail = recentStderr || recentStdout || `exit code ${processExitCode}`;
+      _state = 'error';
+      _lastError = errorDetail;
+      return { ok: false, reason: 'process_crashed', detail: errorDetail };
     }
 
     _state = 'error';
@@ -266,9 +294,10 @@ export async function getGatewayInfo(): Promise<{
 
 // ── Internal ──────────────────────────────────────────────────────────
 
-async function waitForGateway(timeoutMs: number): Promise<boolean> {
+async function waitForGateway(timeoutMs: number, shouldAbort?: () => boolean): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (shouldAbort?.()) return false;
     if (await isGatewayAvailable()) return true;
     await new Promise(r => setTimeout(r, 500));
   }

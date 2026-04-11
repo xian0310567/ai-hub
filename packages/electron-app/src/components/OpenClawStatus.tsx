@@ -30,9 +30,10 @@ interface StatusData {
 const ERROR_MESSAGES: Record<string, string> = {
   openclaw_not_found: 'openclaw CLI를 찾을 수 없습니다.',
   openclaw_not_built: 'OpenClaw 패키지를 빌드해야 합니다.',
-  startup_timeout: '게이트웨이 시작 시간이 초과되었습니다 (10초).',
+  startup_timeout: '게이트웨이 시작 시간이 초과되었습니다.',
   already_starting: '이미 시작 중입니다.',
   process_error: '게이트웨이 프로세스 오류가 발생했습니다.',
+  process_crashed: '게이트웨이 프로세스가 시작 직후 종료되었습니다.',
 };
 
 function getErrorMessage(reason: string | null | undefined): string {
@@ -293,7 +294,12 @@ export default function OpenClawStatus() {
           {showError && (
             <div style={{ padding: '0 0 8px' }}>
               <div style={S.errorBox}>
-                <div>{getErrorMessage(lastError)}</div>
+                <div>{getErrorMessage(gwState === 'error' && lastError && !(lastError in ERROR_MESSAGES) ? 'process_crashed' : lastError)}</div>
+                {lastError && !(lastError in ERROR_MESSAGES) && (
+                  <div style={{ marginTop: 4, fontSize: 10, opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                    {lastError}
+                  </div>
+                )}
                 {(lastError === 'openclaw_not_built' || gatewayInfo?.needsBuild) && (
                   <div style={{ marginTop: 4, fontSize: 10, opacity: 0.85 }}>
                     터미널에서 실행: <code style={{ background: 'rgba(255,255,255,.1)', padding: '1px 4px', borderRadius: 3 }}>pnpm --filter openclaw build</code>

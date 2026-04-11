@@ -147,6 +147,7 @@ export async function GET(req: NextRequest) {
       const { steps, summary, routingMeta } = parseStepsField(m.steps);
       return {
         ...m,
+        routing: JSON.parse(m.routing || '[]'),
         images: m.images ? JSON.parse(m.images) : [],
         steps,
         summary,

@@ -29,8 +29,8 @@ export async function POST(req: NextRequest) {
   const { action } = await req.json() as { action: 'start' | 'stop' };
 
   if (action === 'start') {
-    const result = await startGateway();
-    return Response.json({ ok: result.ok, reason: result.reason });
+    const result = await startGateway(true);
+    return Response.json({ ok: result.ok, reason: result.reason, detail: result.detail });
   }
 
   if (action === 'stop') {

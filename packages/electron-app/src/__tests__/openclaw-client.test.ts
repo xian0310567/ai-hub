@@ -49,6 +49,12 @@ describe('isGatewayAvailable', () => {
     const result = await isGatewayAvailable();
     expect(result).toBe(false);
   });
+
+  it('returns false when gateway returns 500 (plugin error)', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    const result = await isGatewayAvailable();
+    expect(result).toBe(false);
+  });
 });
 
 // ── getGatewayStatus ─────────────────────────────────────────────────

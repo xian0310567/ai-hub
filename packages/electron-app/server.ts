@@ -64,7 +64,7 @@ function startMissionScheduler() {
   setInterval(() => {
     const ts = Math.floor(Date.now() / 1000);
     const due = schedDb.prepare(
-      "SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ?"
+      "SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ? AND openclaw_cron_id IS NULL"
     ).all(ts) as any[];
 
     for (const sched of due) {

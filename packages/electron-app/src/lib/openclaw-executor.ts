@@ -1,0 +1,211 @@
+/**
+ * OpenClaw 실행 인터페이스
+ *
+ * 미션 오케스트레이터가 OpenClaw CLI/Gateway를 프로그래밍 방식으로 호출하는 통합 인터페이스.
+ * 크론 관리(등록/조회/삭제)와 에이전트 1회 실행을 지원하며,
+ * Gateway 가용 시 HTTP API, 불가 시 CLI 직접 호출로 폴백한다.
+ */
+
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { findOpenClawBinary } from './gateway-manager';
+import { isGatewayAvailable, isGatewayReady } from './openclaw-client';
+
+const execFileAsync = promisify(execFile);
+
+const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789';
+const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+
+// ── 타입 ──────────────────────────────────────────────────────────────
+
+export interface CronAddParams {
+  name: string;
+  cron?: string;        // "0 1 * * *"
+  at?: string;          // ISO 8601 datetime
+  every?: string;       // "10m"
+  tz?: string;          // "Asia/Seoul"
+  message: string;
+  agent?: string;
+  thinking?: string;    // off|minimal|low|medium|high
+  model?: string;
+}
+
+export interface CronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  next_run?: string;
+  enabled: boolean;
+}
+
+export interface CronResult {
+  ok: boolean;
+  jobId?: string;
+  error?: string;
+}
+
+export interface AgentRunParams {
+  message: string;
+  agent?: string;
+  thinking?: string;
+  model?: string;
+  timeout?: number;     // seconds (default 300)
+  sessionId?: string;
+  deliver?: boolean;
+  channel?: string;
+  to?: string;
+}
+
+export interface AgentResult {
+  ok: boolean;
+  output?: string;
+  error?: string;
+}
+
+// ── 폴백 래퍼 ─────────────────────────────────────────────────────────
+
+/**
+ * OpenClaw 호출을 시도하고, 실패 시 fallback을 실행한다.
+ * Gateway 미가용이거나 openclawFn이 throw하면 fallbackFn으로 전환.
+ */
+export async function executeWithFallback<T>(
+  openclawFn: () => Promise<T>,
+  fallbackFn: () => Promise<T>,
+  context: string,
+): Promise<T> {
+  if (await isGatewayReady()) {
+    try {
+      return await openclawFn();
+    } catch (err) {
+      console.warn(`[Orchestrator] OpenClaw 실패 (${context}), 폴백 실행:`, err);
+      return fallbackFn();
+    }
+  }
+  return fallbackFn();
+}
+
+// ── 크론 관리 ─────────────────────────────────────────────────────────
+
+export async function cronAdd(params: CronAddParams): Promise<CronResult> {
+  const binary = findOpenClawBinary();
+  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+
+  const args = ['cron', 'add', '--name', params.name, '--json'];
+
+  // 스케줄 타입 (상호 배타)
+  if (params.cron) args.push('--cron', params.cron);
+  else if (params.at) args.push('--at', params.at);
+  else if (params.every) args.push('--every', params.every);
+
+  if (params.tz) args.push('--tz', params.tz);
+  if (params.message) args.push('--message', params.message);
+  if (params.agent) args.push('--agent', params.agent);
+  if (params.thinking) args.push('--thinking', params.thinking);
+  if (params.model) args.push('--model', params.model);
+
+  try {
+    const { stdout } = await execFileAsync(binary, args, {
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    const parsed = JSON.parse(stdout);
+    return { ok: true, jobId: parsed.id ?? parsed.jobId };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function cronList(): Promise<CronJob[]> {
+  const binary = findOpenClawBinary();
+  if (!binary) return [];
+
+  try {
+    const { stdout } = await execFileAsync(binary, ['cron', 'list', '--json'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    return JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+}
+
+export async function cronRemove(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  const binary = findOpenClawBinary();
+  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+
+  try {
+    await execFileAsync(binary, ['cron', 'remove', jobId, '--json'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── 에이전트 실행 ─────────────────────────────────────────────────────
+
+export async function agentRun(params: AgentRunParams): Promise<AgentResult> {
+  // Gateway ready 시 HTTP API 우선
+  if (await isGatewayReady()) {
+    try {
+      const result = await agentRunViaGateway(params);
+      if (result.ok) return result;
+      // Gateway가 응답은 했으나 실패 (500 등) → CLI 폴백
+      console.warn(`[Orchestrator] Gateway 에이전트 실행 실패 (${result.error}), CLI 폴백`);
+    } catch (err) {
+      console.warn('[Orchestrator] Gateway 에이전트 실행 에러, CLI 폴백:', err);
+    }
+  }
+  // 폴백: CLI 직접 호출
+  return agentRunViaCli(params);
+}
+
+async function agentRunViaGateway(params: AgentRunParams): Promise<AgentResult> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
+
+  const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: params.agent ? `openclaw/${params.agent}` : 'openclaw',
+      messages: [{ role: 'user', content: params.message }],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout((params.timeout ?? 300) * 1000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    return { ok: false, error: `Gateway ${res.status}: ${body}` };
+  }
+
+  const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+  return { ok: true, output: data.choices?.[0]?.message?.content ?? '' };
+}
+
+async function agentRunViaCli(params: AgentRunParams): Promise<AgentResult> {
+  const binary = findOpenClawBinary();
+  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+
+  const args = ['agent', '-m', params.message, '--json'];
+  if (params.agent) args.push('--agent', params.agent);
+  if (params.thinking) args.push('--thinking', params.thinking);
+  if (params.model) args.push('--model', params.model);
+  if (params.timeout) args.push('--timeout', String(params.timeout));
+  if (params.sessionId) args.push('--session', params.sessionId);
+
+  try {
+    const { stdout } = await execFileAsync(binary, args, {
+      encoding: 'utf8',
+      timeout: (params.timeout ?? 300) * 1000 + 10_000,
+    });
+    const parsed = JSON.parse(stdout);
+    return { ok: true, output: parsed.output ?? parsed.content ?? stdout };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

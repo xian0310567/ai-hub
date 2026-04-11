@@ -1,9 +1,11 @@
 import { NextRequest } from 'next/server';
-import { Missions, MissionJobs, McpServerConfigs } from '@/lib/db';
+import { Missions, MissionJobs, MissionSchedules, McpServerConfigs } from '@/lib/db';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
 import { readAllPersonalSecrets } from '@/lib/personal-vault';
 import { scoreJob } from '@/lib/quality-scorer';
 import { CLAUDE_CLI, CLAUDE_ENV } from '@/lib/claude-cli';
+import { cronAdd, agentRun } from '@/lib/openclaw-executor';
+import type { CronAddParams, AgentRunParams } from '@/lib/openclaw-executor';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -17,7 +19,32 @@ interface RoutingEntry {
   org_id: string; org_type: string; org_name: string;
   agent_id: string; agent_name: string; subtask: string;
   gate_type?: 'auto' | 'human';
+  executor?: 'c3' | 'openclaw';
+  executor_reason?: string;
+  capability_tags?: string[];
+  openclaw_params?: {
+    thinking?: string;
+    model?: string;
+    timeout_seconds?: number;
+    session_key?: string;
+  };
 }
+
+interface PreTask {
+  type: 'openclaw_cron' | 'openclaw_session_init';
+  params: Record<string, unknown>;
+}
+
+interface PostTask {
+  type: 'openclaw_deliver' | 'notification' | 'schedule_register';
+  params: Record<string, unknown>;
+}
+
+interface ExecutionPlan {
+  pre_tasks: PreTask[];
+  post_tasks: PostTask[];
+}
+
 interface Step {
   org_name: string; agent_name: string;
   status: 'queued' | 'waiting' | 'running' | 'done' | 'failed' | 'gate_pending';
@@ -56,6 +83,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const routing: RoutingEntry[] = JSON.parse(mission.routing || '[]');
   if (!routing.length) return Response.json({ ok: false, error: '라우팅 없음' }, { status: 400 });
+
+  // execution_plan 파싱 (steps 메타에 저장된 실행 계획)
+  let executionPlan: ExecutionPlan | null = null;
+  try {
+    const stepsMeta = JSON.parse(mission.steps || '{}');
+    if (stepsMeta.execution_plan) executionPlan = stepsMeta.execution_plan;
+  } catch {}
 
   const cookie = getVmSessionCookie(req);
 
@@ -98,6 +132,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
       Missions.update(id, { status: 'running', steps: JSON.stringify(steps) });
       send({ type: 'start', steps });
+
+      // ── 1단계: pre_tasks (인프라 설정) ──
+      if (executionPlan?.pre_tasks?.length) {
+        for (const preTask of executionPlan.pre_tasks) {
+          send({ type: 'pre_task', task_type: preTask.type, status: 'running' });
+          try {
+            await executePreTask(preTask, vaultEnv, { missionId: id, userId: user.id, missionTask: mission.task, routing: mission.routing || '[]', cookie });
+            send({ type: 'pre_task', task_type: preTask.type, status: 'done' });
+          } catch (err) {
+            send({ type: 'pre_task', task_type: preTask.type, status: 'failed', error: err instanceof Error ? err.message : String(err) });
+            // pre_task 실패 시 전체 미션 중단하지 않음 (폴백 가능)
+          }
+        }
+      }
 
       // 협업 보드 생성 + 실시간 폴링
       const boardPath = buildMissionBoard(id, mission.task, routing);
@@ -144,7 +192,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try {
           // vm-server에서 에이전트 정보 가져오기
           const agent = await vmGet(`/api/agents/${r.agent_id}`, cookie);
-          const output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie, mcpConfigPath, routing, boardPath);
+
+          // executor에 따라 실행 수단 분기
+          let output: string;
+          if (r.executor === 'openclaw') {
+            const result = await agentRun({
+              message: buildOpenClawPrompt(r, mission.task, agent),
+              agent: r.openclaw_params?.session_key || r.agent_id,
+              thinking: r.openclaw_params?.thinking,
+              model: r.openclaw_params?.model || agent?.model,
+              timeout: r.openclaw_params?.timeout_seconds,
+              sessionId: r.openclaw_params?.session_key,
+            });
+            if (!result.ok) throw new Error(result.error || 'OpenClaw 에이전트 실행 실패');
+            output = result.output || '';
+          } else {
+            output = await runAgentTask(r, mission.task, agent, id, vaultEnv, cookie, mcpConfigPath, routing, boardPath);
+          }
 
           // 증거 없는 완료 불인정
           if (!output || output.trim().length < 50) {
@@ -169,6 +233,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }));
       boardPollStopped = true;
+
+      // ── 3단계: post_tasks (결과 전송, 알림) ──
+      if (executionPlan?.post_tasks?.length) {
+        for (const postTask of executionPlan.post_tasks) {
+          send({ type: 'post_task', task_type: postTask.type, status: 'running' });
+          try {
+            await executePostTask(postTask, results);
+            send({ type: 'post_task', task_type: postTask.type, status: 'done' });
+          } catch (err) {
+            send({ type: 'post_task', task_type: postTask.type, status: 'failed', error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+      }
 
       send({ type: 'consolidating' });
       try {
@@ -409,4 +486,96 @@ ${resultBlock}
 형식으로 작성하고, 결과물만 출력하세요:`;
 
   return callClaude(prompt, process.cwd(), [], false, imagePaths);
+}
+
+// ── OpenClaw 프롬프트 빌드 ────────────────────────────────────────────
+function buildOpenClawPrompt(r: RoutingEntry, missionTask: string, agent: any): string {
+  return `${agent?.soul ? `## 당신의 소울\n${agent.soul}\n\n` : ''}## 미션
+전체 미션: ${missionTask}
+
+## 배정된 업무
+${r.subtask}
+
+## 지시사항
+작업을 직접 완료하세요.
+완료 후 "## 완료된 작업" 섹션에 수행한 내용을 요약하세요.
+
+지금 바로 시작하세요:`;
+}
+
+// ── Pre-task 실행 ─────────────────────────────────────────────────────
+async function executePreTask(
+  task: PreTask,
+  vaultEnv: Record<string, string>,
+  ctx: { missionId: string; userId: string; missionTask: string; routing: string; cookie: string },
+): Promise<void> {
+  switch (task.type) {
+    case 'openclaw_cron': {
+      const p = task.params as Record<string, string>;
+      const cronExpr = p.cron || '';
+      const result = await cronAdd({
+        name: p.name || '미션 크론',
+        cron: cronExpr || undefined,
+        at: p.at,
+        every: p.every,
+        tz: p.tz || 'Asia/Seoul',
+        message: p.message || '',
+        agent: p.agent,
+        thinking: p.thinking,
+        model: p.model,
+      });
+      if (!result.ok) {
+        // OpenClaw 크론 실패 → 로컬 스케줄러로 폴백 등록
+        if (cronExpr) {
+          try {
+            const cronParser = await import('cron-parser');
+            const interval = cronParser.parseExpression(cronExpr);
+            const nextTs = Math.floor(interval.next().getTime() / 1000);
+            MissionSchedules.create({
+              id: randomUUID(),
+              user_id: ctx.userId,
+              name: p.name || '미션 크론',
+              cron_expr: cronExpr,
+              task: ctx.missionTask,
+              routing: ctx.routing,
+              session_cookie: ctx.cookie,
+              next_run_at: nextTs,
+            });
+          } catch { /* cron 파싱 실패 시 무시 */ }
+        }
+        throw new Error(`스케줄 등록에 실패했습니다. 로컬 스케줄러로 대체 등록합니다. (${result.error})`);
+      }
+      break;
+    }
+    case 'openclaw_session_init': {
+      break;
+    }
+  }
+}
+
+// ── Post-task 실행 ────────────────────────────────────────────────────
+async function executePostTask(task: PostTask, results: { org_name: string; agent_name: string; output: string }[]): Promise<void> {
+  switch (task.type) {
+    case 'openclaw_deliver': {
+      const p = task.params as Record<string, string>;
+      const summary = results.map(r => `[${r.org_name}] ${r.output.slice(0, 200)}`).join('\n');
+      const msg = p.message || summary;
+      const result = await agentRun({
+        message: `다음 내용을 ${p.channel || 'slack'}의 ${p.to || '기본 채널'}에 전송하세요:\n\n${msg}`,
+        deliver: true,
+        channel: p.channel,
+        to: p.to,
+      });
+      if (!result.ok) throw new Error(`채널 전송 실패: ${result.error}`);
+      break;
+    }
+    case 'notification': {
+      // 알림은 현재 로컬 알림 생성으로 처리 (향후 확장)
+      break;
+    }
+    case 'schedule_register': {
+      // 스케줄 등록은 Phase 5에서 처리
+      break;
+    }
+  }
 }

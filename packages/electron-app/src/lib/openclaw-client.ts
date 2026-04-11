@@ -46,8 +46,19 @@ export async function isGatewayAvailable(): Promise<boolean> {
     const res = await fetch(`${GATEWAY_URL}/health`, {
       signal: AbortSignal.timeout(3000),
     });
-    // Gateway가 응답하면 가용 상태로 판단 (확장 모듈 오류 등으로 500이 올 수 있음)
-    return res.status > 0;
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Gateway가 완전히 초기화되어 요청을 처리할 준비가 되었는지 확인 */
+export async function isGatewayReady(): Promise<boolean> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/ready`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
   } catch {
     return false;
   }

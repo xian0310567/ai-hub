@@ -2,9 +2,10 @@
  * 미션 백그라운드 실행 — 스케줄러에서 호출
  * SSE 없이 미션을 실행하고 결과를 DB에 저장
  */
-import { Missions, MissionJobs } from './db.js';
+import { Missions, MissionJobs, MissionSchedules } from './db.js';
 import { readAllPersonalSecrets } from './personal-vault.js';
 import { CLAUDE_CLI, CLAUDE_ENV } from './claude-cli.js';
+import { cronAdd, agentRun } from './openclaw-executor.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -18,6 +19,30 @@ interface RoutingEntry {
   org_id: string; org_type: string; org_name: string;
   agent_id: string; agent_name: string; subtask: string;
   gate_type?: 'auto' | 'human';
+  executor?: 'c3' | 'openclaw';
+  executor_reason?: string;
+  capability_tags?: string[];
+  openclaw_params?: {
+    thinking?: string;
+    model?: string;
+    timeout_seconds?: number;
+    session_key?: string;
+  };
+}
+
+interface PreTask {
+  type: 'openclaw_cron' | 'openclaw_session_init';
+  params: Record<string, unknown>;
+}
+
+interface PostTask {
+  type: 'openclaw_deliver' | 'notification' | 'schedule_register';
+  params: Record<string, unknown>;
+}
+
+interface ExecutionPlan {
+  pre_tasks: PreTask[];
+  post_tasks: PostTask[];
 }
 
 async function vmGet(endpoint: string, cookie = '') {
@@ -145,6 +170,13 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
   const routing: RoutingEntry[] = JSON.parse(mission.routing || '[]');
   if (!routing.length) throw new Error('라우팅 없음');
 
+  // execution_plan 파싱
+  let executionPlan: ExecutionPlan | null = null;
+  try {
+    const stepsMeta = JSON.parse(mission.steps || '{}');
+    if (stepsMeta.execution_plan) executionPlan = stepsMeta.execution_plan;
+  } catch {}
+
   // Vault 시크릿 수집
   const vaultEnv = await collectVaultEnv(mission.user_id, sessionCookie);
   if (Object.keys(vaultEnv).length > 0)
@@ -169,8 +201,39 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
   });
   Missions.update(missionId, { status: 'running', steps: JSON.stringify(steps) });
 
+  // ── 1단계: pre_tasks ──
+  if (executionPlan?.pre_tasks?.length) {
+    for (const preTask of executionPlan.pre_tasks) {
+      try {
+        if (preTask.type === 'openclaw_cron') {
+          const p = preTask.params as Record<string, string>;
+          const cronExpr = p.cron || '';
+          const result = await cronAdd({ name: p.name || '미션 크론', cron: cronExpr || undefined, at: p.at, every: p.every, tz: p.tz || 'Asia/Seoul', message: p.message || '', agent: p.agent, thinking: p.thinking, model: p.model });
+          if (!result.ok && cronExpr) {
+            // OpenClaw 크론 실패 → 로컬 스케줄러 폴백
+            try {
+              const cronParser = await import('cron-parser');
+              const interval = cronParser.parseExpression(cronExpr);
+              const nextTs = Math.floor(interval.next().getTime() / 1000);
+              MissionSchedules.create({
+                id: randomUUID(), user_id: mission.user_id,
+                name: p.name || '미션 크론', cron_expr: cronExpr,
+                task: mission.task, routing: mission.routing || '[]',
+                session_cookie: sessionCookie, next_run_at: nextTs,
+              });
+              console.warn(`[mission-runner] OpenClaw 크론 실패, 로컬 스케줄러로 대체 등록: ${result.error}`);
+            } catch { /* cron 파싱 실패 시 무시 */ }
+          }
+        }
+      } catch (err) {
+        console.warn(`[mission-runner] pre_task 실패 (${preTask.type}):`, err);
+      }
+    }
+  }
+
   const results: { org_name: string; agent_name: string; output: string }[] = [];
 
+  // ── 2단계: agent_tasks ──
   await Promise.allSettled(routing.map(async (r, idx) => {
     const jobId = jobIds[idx];
     await waitForTurn(r.agent_id, jobId);
@@ -199,7 +262,22 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
 
 지금 바로 시작하세요:`;
 
-      const output = await callClaude(prompt, wsPath, modelArgs, true, [], vaultEnv);
+      // executor에 따라 실행 수단 분기
+      let output: string;
+      if (r.executor === 'openclaw') {
+        const result = await agentRun({
+          message: prompt,
+          agent: r.openclaw_params?.session_key || r.agent_id,
+          thinking: r.openclaw_params?.thinking,
+          model: r.openclaw_params?.model || agent?.model,
+          timeout: r.openclaw_params?.timeout_seconds,
+          sessionId: r.openclaw_params?.session_key,
+        });
+        if (!result.ok) throw new Error(result.error || 'OpenClaw 에이전트 실행 실패');
+        output = result.output || '';
+      } else {
+        output = await callClaude(prompt, wsPath, modelArgs, true, [], vaultEnv);
+      }
 
       // 증거 없는 완료 불인정
       if (!output || output.trim().length < 50) {
@@ -218,6 +296,21 @@ Read, Edit, Write, Bash 도구를 사용해 작업을 직접 완료하세요.
       results.push({ org_name: r.org_name, agent_name: r.agent_name, output: `[실패: ${msg}]` });
     }
   }));
+
+  // ── 3단계: post_tasks ──
+  if (executionPlan?.post_tasks?.length) {
+    for (const postTask of executionPlan.post_tasks) {
+      try {
+        if (postTask.type === 'openclaw_deliver') {
+          const p = postTask.params as Record<string, string>;
+          const summary = results.map(r => `[${r.org_name}] ${r.output.slice(0, 200)}`).join('\n');
+          await agentRun({ message: `다음 내용을 ${p.channel || 'slack'}의 ${p.to || '기본 채널'}에 전송하세요:\n\n${p.message || summary}`, deliver: true, channel: p.channel, to: p.to });
+        }
+      } catch (err) {
+        console.warn(`[mission-runner] post_task 실패 (${postTask.type}):`, err);
+      }
+    }
+  }
 
   // 통합 문서 생성
   try {

@@ -65,7 +65,7 @@ let _needsBuild = false;
 export function isOpenClawNeedsBuild(): boolean { return _needsBuild; }
 
 /** OpenClaw CLI 바이너리 경로를 탐지한다. */
-function findOpenClawBinary(): string | null {
+export function findOpenClawBinary(): string | null {
   _needsBuild = false;
 
   // 1. 환경변수로 직접 지정

@@ -235,7 +235,8 @@ export async function POST(req: NextRequest) {
               steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
                 clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [],
                 is_recurring: parsed.is_recurring || false, schedule_name: parsed.schedule_name || null,
-                cron_expr: parsed.cron_expr || null }),
+                cron_expr: parsed.cron_expr || null,
+                execution_plan: parsed.execution_plan || null }),
             });
 
             // 반복 미션이면 스케줄 생성
@@ -319,10 +320,30 @@ ${orgChart}
 ## 사용자 요청
 ${task}
 
+## 실행 수단
+
+이 시스템은 두 가지 실행 수단을 갖고 있습니다:
+
+### c3 (Claude CLI) — 즉시 실행, 로컬 작업
+- Read, Write, Edit, Bash 도구로 로컬 파일시스템 접근
+- 코드 수정, 빌드, 테스트 실행 가능
+- 게이트웨이 불필요, 독립 프로세스
+- 스케줄링/외부 전송 불가
+
+### OpenClaw — 스케줄링, 외부 전송, 세션
+- 크론 스케줄링: 1회 예약(at), 반복(cron/every)
+- 채널 전송: Slack, Discord, Telegram 등
+- 영속 세션: 이전 대화 컨텍스트 유지
+- 미디어 처리: 이미지, 음성, 영상
+
 반드시 아래 JSON 형식으로만 답변하세요:
 {
   "summary": "미션 요약 (1문장)",
-  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[],"gate_type":"auto"}],
+  "execution_plan": {
+    "pre_tasks": [],
+    "post_tasks": []
+  },
+  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[],"gate_type":"auto","executor":"c3","executor_reason":"...","capability_tags":[]}],
   "needs_clarification": false,
   "clarification": null,
   "new_org_needed": [],
@@ -330,6 +351,27 @@ ${task}
   "cron_expr": null,
   "schedule_name": null
 }
+
+executor 판단 기준:
+- 기본값은 "c3" (로컬 Claude CLI 실행)
+- 다음 경우 "openclaw" 사용:
+  · 예약/반복 실행이 필요한 작업 → pre_tasks에 openclaw_cron도 추가
+  · 외부 채널 전송이 필요한 작업 → post_tasks에 openclaw_deliver 추가
+  · 이전 대화 맥락이 필요한 작업
+- 로컬 파일 수정, 코드 작업은 반드시 "c3"
+- 확실하지 않으면 "c3" (더 안전)
+- executor_reason: 왜 해당 executor를 선택했는지 한 문장으로 설명
+
+capability_tags 종류: file_io, code_execution, web_search, scheduling, channel_delivery, persistent_session, media_processing, immediate
+
+pre_tasks 형식:
+- openclaw_cron: {"type":"openclaw_cron","params":{"name":"...","cron":"0 1 * * *","tz":"Asia/Seoul","message":"에이전트에게 전달할 프롬프트"}}
+- openclaw_session_init: {"type":"openclaw_session_init","params":{"session_key":"..."}}
+
+post_tasks 형식:
+- openclaw_deliver: {"type":"openclaw_deliver","params":{"channel":"slack","to":"...","message":"..."}}
+- notification: {"type":"notification","params":{"title":"...","message":"..."}}
+- schedule_register: {"type":"schedule_register","params":{"name":"...","cron":"...","tz":"..."}}
 
 gate_type 판단 기준:
 - 기본값은 "auto" (자동 실행)

@@ -130,6 +130,7 @@ try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAU
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 try { db.exec("ALTER TABLE chat_logs ADD COLUMN session_key TEXT"); } catch {}
+try { db.exec("ALTER TABLE mission_schedules ADD COLUMN openclaw_cron_id TEXT"); } catch {}
 
 // 마이그레이션 후 session_key 인덱스 생성 (기존 DB에 session_key가 없을 때 db.exec 안에서 실패하는 것 방지)
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_chat_logs_user_session ON chat_logs(user_id, agent_id, session_key)"); } catch {}
@@ -327,7 +328,7 @@ export const McpServerConfigs = {
 
 export const MissionSchedules = {
   list:    (userId: string) => db.prepare('SELECT * FROM mission_schedules WHERE user_id=? ORDER BY created_at DESC').all(userId) as MissionSchedule[],
-  listDue: () => db.prepare('SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= unixepoch()').all() as MissionSchedule[],
+  listDue: () => db.prepare('SELECT * FROM mission_schedules WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= unixepoch() AND openclaw_cron_id IS NULL').all() as MissionSchedule[],
   get:     (id: string) => db.prepare('SELECT * FROM mission_schedules WHERE id=?').get(id) as MissionSchedule | undefined,
   create:  (s: { id: string; user_id: string; name: string; cron_expr: string; task: string; routing: string; session_cookie?: string; next_run_at: number }) =>
     db.prepare('INSERT INTO mission_schedules(id,user_id,name,cron_expr,task,routing,session_cookie,next_run_at) VALUES(?,?,?,?,?,?,?,?)').run(s.id, s.user_id, s.name, s.cron_expr, s.task, s.routing, s.session_cookie ?? '', s.next_run_at),

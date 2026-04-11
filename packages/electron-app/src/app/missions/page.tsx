@@ -9,6 +9,24 @@ interface Routing {
   agent_id: string;
   agent_name: string;
   subtask: string;
+  executor?: 'c3' | 'openclaw';
+  executor_reason?: string;
+  capability_tags?: string[];
+}
+
+interface PreTask {
+  type: string;
+  params: Record<string, unknown>;
+}
+
+interface PostTask {
+  type: string;
+  params: Record<string, unknown>;
+}
+
+interface ExecutionPlanMeta {
+  pre_tasks: PreTask[];
+  post_tasks: PostTask[];
 }
 
 interface Step {
@@ -36,6 +54,7 @@ interface Mission {
     is_recurring?: boolean;
     cron_expr?: string;
     schedule_name?: string;
+    execution_plan?: ExecutionPlanMeta;
   };
   created_at?: number;
 }
@@ -797,6 +816,59 @@ export default function MissionsPage() {
               } catch {}
               return null;
             })()}
+
+            {/* 실행 계획 (execution_plan) */}
+            {current.routingMeta?.execution_plan && (
+              (() => {
+                const ep = current.routingMeta.execution_plan!;
+                const hasPreTasks = ep.pre_tasks && ep.pre_tasks.length > 0;
+                const hasPostTasks = ep.post_tasks && ep.post_tasks.length > 0;
+                const hasExecutors = current.routing.some(r => r.executor === 'openclaw');
+                if (!hasPreTasks && !hasPostTasks && !hasExecutors) return null;
+                return (
+                  <div style={{ padding: '14px 16px', background: '#8b5cf608', border: '1px solid #8b5cf640', borderRadius: 6, marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                      <span style={{ fontSize: 14 }}>{'⚡'}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#8b5cf6' }}>실행 계획</span>
+                    </div>
+                    {hasPreTasks && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>사전 작업 ({ep.pre_tasks.length}건)</div>
+                        {ep.pre_tasks.map((t, i) => (
+                          <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ color: '#8b5cf6' }}>{'▸'}</span>
+                            {t.type === 'openclaw_cron' ? `OpenClaw 크론 등록: ${(t.params as any).name || (t.params as any).cron || ''}` : t.type}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {hasExecutors && (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>에이전트 실행 수단</div>
+                        {current.routing.filter(r => r.executor).map((r, i) => (
+                          <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: r.executor === 'openclaw' ? '#8b5cf618' : '#10b98118', color: r.executor === 'openclaw' ? '#8b5cf6' : '#10b981' }}>{r.executor === 'openclaw' ? 'OpenClaw' : 'c3'}</span>
+                            <span>[{r.org_name}] {r.agent_name}</span>
+                            {r.executor_reason && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>— {r.executor_reason}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {hasPostTasks && (
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 4 }}>후속 작업 ({ep.post_tasks.length}건)</div>
+                        {ep.post_tasks.map((t, i) => (
+                          <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ color: '#8b5cf6' }}>{'▸'}</span>
+                            {t.type === 'openclaw_deliver' ? `채널 전송: ${(t.params as any).channel || ''} ${(t.params as any).to || ''}` : t.type}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            )}
 
             {/* 통계 요약 카드 */}
             {(() => {

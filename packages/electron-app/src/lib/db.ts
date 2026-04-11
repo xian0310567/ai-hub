@@ -56,6 +56,7 @@ db.exec(`
     routing           TEXT NOT NULL DEFAULT '[]',
     steps             TEXT NOT NULL DEFAULT '[]',
     final_doc         TEXT NOT NULL DEFAULT '',
+    result            TEXT NOT NULL DEFAULT '',
     images            TEXT NOT NULL DEFAULT '[]',
     parent_mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL,
     origin            TEXT NOT NULL DEFAULT 'user',
@@ -126,6 +127,7 @@ db.exec(`
 // 마이그레이션: 기존 DB에 신규 컬럼 추가 (이미 있으면 무시)
 try { db.exec("ALTER TABLE missions ADD COLUMN parent_mission_id TEXT REFERENCES missions(id) ON DELETE SET NULL"); } catch {}
 try { db.exec("ALTER TABLE missions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"); } catch {}
+try { db.exec("ALTER TABLE missions ADD COLUMN result TEXT NOT NULL DEFAULT ''"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_type TEXT NOT NULL DEFAULT 'auto'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
@@ -351,11 +353,11 @@ export interface ChatSession {
   agent_id: string; session_key: string | null; last_at: number; msg_count: number;
 }
 export interface Notification {
-  id: string; user_id: string; type: string; title: string; message: string; read: number; created_at?: number;
+  id: string; user_id: string; type: string; title: string; message: string; read?: number; created_at?: number;
 }
 export interface Mission {
   id: string; user_id: string; task: string; status: string;
-  routing: string; steps: string; final_doc: string; images?: string;
+  routing: string; steps: string; final_doc: string; result?: string; images?: string;
   parent_mission_id?: string; origin: string;
   created_at?: number; updated_at?: number;
 }

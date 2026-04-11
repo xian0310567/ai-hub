@@ -82,20 +82,24 @@ export async function taskRoutes(app: FastifyInstance) {
     };
     if (!id) return reply.code(400).send({ error: 'id required' });
 
+    // 다른 조직의 task를 수정하지 못하도록 org_id를 모든 UPDATE에 강제
+    const existing = await q1('SELECT id FROM tasks WHERE id = ? AND org_id = ?', [id, user.orgId]);
+    if (!existing) return reply.code(404).send({ error: 'Not found' });
+
     const ts = now();
     if (status === 'running')
-      await exec('UPDATE tasks SET status = ?, started_at = ? WHERE id = ?', [status, ts, id]);
+      await exec('UPDATE tasks SET status = ?, started_at = ? WHERE id = ? AND org_id = ?', [status, ts, id, user.orgId]);
     else if (status === 'completed' || status === 'failed')
-      await exec('UPDATE tasks SET status = ?, result = ?, finished_at = ? WHERE id = ?', [status, result ?? '', ts, id]);
+      await exec('UPDATE tasks SET status = ?, result = ?, finished_at = ? WHERE id = ? AND org_id = ?', [status, result ?? '', ts, id, user.orgId]);
     else if (status)
-      await exec('UPDATE tasks SET status = ? WHERE id = ?', [status, id]);
+      await exec('UPDATE tasks SET status = ? WHERE id = ? AND org_id = ?', [status, id, user.orgId]);
 
     if (result !== undefined && !status)
-      await exec('UPDATE tasks SET result = ? WHERE id = ?', [result, id]);
+      await exec('UPDATE tasks SET result = ? WHERE id = ? AND org_id = ?', [result, id, user.orgId]);
     if (assigned_host_id !== undefined)
-      await exec('UPDATE tasks SET assigned_host_id = ? WHERE id = ?', [assigned_host_id, id]);
+      await exec('UPDATE tasks SET assigned_host_id = ? WHERE id = ? AND org_id = ?', [assigned_host_id, id, user.orgId]);
 
-    return q1('SELECT * FROM tasks WHERE id = ?', [id]);
+    return q1('SELECT * FROM tasks WHERE id = ? AND org_id = ?', [id, user.orgId]);
   });
 
   app.delete('/', async (req, reply) => {

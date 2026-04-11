@@ -25,7 +25,7 @@ describe('POST /api/auth/signup', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signup',
-      payload: { username: 'newuser', password: 'password123', orgSlug: 'testorg' },
+      payload: { username: 'newuser', password: 'password123', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({ ok: true });
@@ -35,20 +35,20 @@ describe('POST /api/auth/signup', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signup',
-      payload: { username: 'ab', password: 'password123' },
+      payload: { username: 'ab', password: 'password123', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/Username/);
+    expect(res.json().error).toMatch(/아이디/);
   });
 
   it('returns 400 for password too short', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signup',
-      payload: { username: 'validname', password: '123' },
+      payload: { username: 'validname', password: '123', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/Password/);
+    expect(res.json().error).toMatch(/비밀번호/);
   });
 
   it('returns 409 for duplicate username', async () => {
@@ -56,10 +56,10 @@ describe('POST /api/auth/signup', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signup',
-      payload: { username: 'dupuser', password: 'password123' },
+      payload: { username: 'dupuser', password: 'password123', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/taken/i);
+    expect(res.json().error).toMatch(/이미 사용/);
   });
 });
 
@@ -70,7 +70,7 @@ describe('POST /api/auth/signin', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signin',
-      payload: { username: 'alice', password: 'mypassword' },
+      payload: { username: 'alice', password: 'mypassword', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true });
@@ -87,17 +87,23 @@ describe('POST /api/auth/signin', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signin',
-      payload: { username: 'bob', password: 'wrongpass' },
+      payload: { username: 'bob', password: 'wrongpass', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(401);
-    expect(res.json().error).toMatch(/credentials/i);
+    expect(res.json().error).toMatch(/비밀번호/);
   });
 
   it('returns 401 for unknown user', async () => {
+    // Pre-seed org so workspace resolution succeeds
+    const orgId = newId();
+    await getPool().query(
+      'INSERT INTO organizations(id,name,slug) VALUES($1,$2,$3)',
+      [orgId, 'Test', 'testorg'],
+    );
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/signin',
-      payload: { username: 'nobody', password: 'password123' },
+      payload: { username: 'nobody', password: 'password123', workspace: 'testorg' },
     });
     expect(res.statusCode).toBe(401);
   });

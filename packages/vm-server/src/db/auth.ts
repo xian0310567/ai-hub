@@ -15,11 +15,11 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
     throw new Error('Unauthorized');
   }
 
-  const row = await q1<{ user_id: string; username: string; org_id: string; role: string }>(`
+  const row = await q1<{ user_id: string; username: string; org_id: string | null; role: string | null }>(`
     SELECT s.user_id, u.username, s.org_id, om.role
     FROM sessions s
     JOIN users u ON s.user_id = u.id
-    JOIN org_members om ON om.user_id = u.id AND om.org_id = s.org_id
+    LEFT JOIN org_members om ON om.user_id = u.id AND om.org_id = s.org_id
     WHERE s.id = ? AND s.expires_at > ?
     LIMIT 1
   `, [sessionId, now()]);
@@ -38,7 +38,7 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
     userId: row.user_id,
     username: row.username,
     orgId: row.org_id,
-    role: row.role,
+    role: row.role ?? 'member',
   };
 }
 

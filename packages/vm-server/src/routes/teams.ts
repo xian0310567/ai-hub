@@ -79,9 +79,16 @@ export async function teamRoutes(app: FastifyInstance) {
   });
 
   // 팀 멤버 관리
+  // 모든 팀 멤버 엔드포인트는 해당 팀이 요청자의 org에 속해 있어야 한다.
+  async function assertTeamInOrg(teamId: string, orgId: string): Promise<boolean> {
+    const row = await q1('SELECT id FROM teams WHERE id = ? AND org_id = ?', [teamId, orgId]);
+    return !!row;
+  }
+
   app.get('/:teamId/members', async (req, reply) => {
-    await requireAuth(req, reply);
+    const user = await requireAuth(req, reply);
     const { teamId } = req.params as { teamId: string };
+    if (!(await assertTeamInOrg(teamId, user.orgId))) return reply.code(404).send({ error: 'Not found' });
     return qall(`
       SELECT u.id, u.username, tm.role, tm.joined_at
       FROM team_members tm JOIN users u ON u.id = tm.user_id
@@ -90,9 +97,15 @@ export async function teamRoutes(app: FastifyInstance) {
   });
 
   app.post('/:teamId/members', async (req, reply) => {
-    await requireAuth(req, reply);
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const { teamId } = req.params as { teamId: string };
+    if (!(await assertTeamInOrg(teamId, user.orgId))) return reply.code(404).send({ error: 'Not found' });
     const { user_id, role } = req.body as { user_id: string; role?: string };
+    if (!user_id) return reply.code(400).send({ error: 'user_id required' });
+    // 추가 대상 사용자도 동일 조직 소속이어야 한다.
+    const member = await q1('SELECT id FROM org_members WHERE org_id = ? AND user_id = ?', [user.orgId, user_id]);
+    if (!member) return reply.code(403).send({ error: 'User is not in this organization' });
     await exec(
       'INSERT INTO team_members(id,team_id,user_id,role) VALUES(?,?,?,?) ON CONFLICT DO NOTHING',
       [newId(), teamId, user_id, role ?? 'member'],
@@ -101,8 +114,10 @@ export async function teamRoutes(app: FastifyInstance) {
   });
 
   app.delete('/:teamId/members/:userId', async (req, reply) => {
-    await requireAuth(req, reply);
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
     const { teamId, userId } = req.params as { teamId: string; userId: string };
+    if (!(await assertTeamInOrg(teamId, user.orgId))) return reply.code(404).send({ error: 'Not found' });
     await exec('DELETE FROM team_members WHERE team_id = ? AND user_id = ?', [teamId, userId]);
     return { ok: true };
   });

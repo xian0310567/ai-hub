@@ -16,8 +16,6 @@ export default defineConfig({
     video: 'retain-on-failure',
     navigationTimeout: 30_000,
     actionTimeout: 10_000,
-    // 외부 폰트 등 서드파티 리소스 로딩 무관하게 DOM 완료 시 ready
-    waitForLoadStateOptions: { waitUntil: 'domcontentloaded' } as never,
     launchOptions: {
       executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell',
       args: [

@@ -27,8 +27,11 @@ let _keytar: Keytar | null | undefined; // undefined = 미초기화
 async function getKeytar(): Promise<Keytar | null> {
   if (_keytar !== undefined) return _keytar;
   try {
-    const mod = await import('keytar');
-    _keytar = (mod.default ?? mod) as unknown as Keytar;
+    // 동적 모듈 이름으로 TS 컴파일 시점에 keytar 타입 해석을 회피
+    // (keytar는 선택 의존성이며, 네이티브 빌드 실패 시 파일 폴백으로 동작)
+    const moduleName = 'keytar';
+    const mod = await import(/* webpackIgnore: true */ moduleName) as { default?: Keytar } & Keytar;
+    _keytar = (mod.default ?? mod) as Keytar;
     return _keytar;
   } catch {
     _keytar = null;

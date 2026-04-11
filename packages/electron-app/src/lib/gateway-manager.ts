@@ -7,7 +7,7 @@
 
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { isGatewayAvailable } from './openclaw-client.js';
+import { isGatewayAvailable } from './openclaw-client';
 
 // ── 상태 ──────────────────────────────────────────────────────────────
 
@@ -262,7 +262,7 @@ function stopHealthCheck(): void {
 export async function initGatewayAutoStart(): Promise<void> {
   try {
     // 동적 import로 순환 의존 방지 — Settings는 db.ts에 있음
-    const { Settings } = await import('./db.js');
+    const { Settings } = await import('./db');
     const autoStart = Settings.get('gateway_auto_start');
     if (autoStart === 'true') {
       console.log('[Gateway] 자동 시작 설정 감지 — 시작 시도');

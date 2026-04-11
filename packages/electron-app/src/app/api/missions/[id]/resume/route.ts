@@ -167,6 +167,7 @@ async function waitForApproval(jobId: string) {
 
 // ── POST /api/missions/[id]/resume ────────────────────────────────────
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
@@ -403,4 +404,8 @@ ${resultBlock}
   return new Response(stream, {
     headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
   });
+  } catch (err) {
+    console.error('[POST /api/missions/:id/resume] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 재개 준비 중 오류가 발생했습니다' }, { status: 500 });
+  }
 }

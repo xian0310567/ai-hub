@@ -15,22 +15,27 @@ const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'
 const MIME_TO_EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 // ── vm-server에서 조직도 가져오기 ─────────────────────────────────────
+async function safeFetch(url: string, headers: Record<string, string>): Promise<any[]> {
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    // 네트워크 오류 (ECONNREFUSED 등) 시 빈 배열 반환
+    return [];
+  }
+}
+
 async function fetchOrgData(cookie: string) {
   const headers = { 'Content-Type': 'application/json', Cookie: cookie };
-  const [divisionsRes, workspacesRes, teamsRes, partsRes, agentsRes] = await Promise.all([
-    fetch(`${VM_URL}/api/divisions`, { headers }),
-    fetch(`${VM_URL}/api/workspaces`, { headers }),
-    fetch(`${VM_URL}/api/teams`, { headers }),
-    fetch(`${VM_URL}/api/parts`, { headers }),
-    fetch(`${VM_URL}/api/agents`, { headers }),
+  const [divisions, workspaces, teams, parts, agents] = await Promise.all([
+    safeFetch(`${VM_URL}/api/divisions`, headers),
+    safeFetch(`${VM_URL}/api/workspaces`, headers),
+    safeFetch(`${VM_URL}/api/teams`, headers),
+    safeFetch(`${VM_URL}/api/parts`, headers),
+    safeFetch(`${VM_URL}/api/agents`, headers),
   ]);
-  return {
-    divisions:  divisionsRes.ok  ? await divisionsRes.json()  : [],
-    workspaces: workspacesRes.ok ? await workspacesRes.json() : [],
-    teams:      teamsRes.ok      ? await teamsRes.json()      : [],
-    parts:      partsRes.ok      ? await partsRes.json()      : [],
-    agents:     agentsRes.ok     ? await agentsRes.json()     : [],
-  };
+  return { divisions, workspaces, teams, parts, agents };
 }
 
 // ── 조직도 텍스트 빌드 ────────────────────────────────────────────────
@@ -134,153 +139,173 @@ function parseStepsField(raw: string | undefined): { steps: any[]; summary?: str
 
 // ── GET /api/missions ─────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  const user = await getSession(req);
-  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  try {
+    const user = await getSession(req);
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const missions = Missions.list(user.id).map(m => {
-    const { steps, summary, routingMeta } = parseStepsField(m.steps);
-    return {
-      ...m,
-      images: m.images ? JSON.parse(m.images) : [],
-      steps,
-      summary,
-      routingMeta,
-    };
-  });
-  return Response.json({ ok: true, missions });
+    const missions = Missions.list(user.id).map(m => {
+      const { steps, summary, routingMeta } = parseStepsField(m.steps);
+      return {
+        ...m,
+        images: m.images ? JSON.parse(m.images) : [],
+        steps,
+        summary,
+        routingMeta,
+      };
+    });
+    return Response.json({ ok: true, missions });
+  } catch (err) {
+    console.error('[GET /api/missions] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 목록 조회 실패' }, { status: 500 });
+  }
 }
 
 // ── POST /api/missions ────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
-  const user = await getSession(req);
-  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-
-  const { task, images = [], parent_mission_id, origin } = await req.json() as {
-    task: string; images?: string[];
-    parent_mission_id?: string; origin?: string;
-  };
-  if (!task?.trim()) return Response.json({ ok: false, error: '미션 설명을 입력하세요' }, { status: 400 });
-
-  const id = randomUUID();
-  let savedImages: { path: string; filename: string; size: number }[] = [];
-
   try {
-    if (images.length > 0) savedImages = await saveImages(user.id, id, images);
+    const user = await getSession(req);
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
+    const { task, images = [], parent_mission_id, origin } = await req.json() as {
+      task: string; images?: string[];
+      parent_mission_id?: string; origin?: string;
+    };
+    if (!task?.trim()) return Response.json({ ok: false, error: '미션 설명을 입력하세요' }, { status: 400 });
+
+    const id = randomUUID();
+    let savedImages: { path: string; filename: string; size: number }[] = [];
+
+    try {
+      if (images.length > 0) savedImages = await saveImages(user.id, id, images);
+    } catch (err) {
+      return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+    }
+
+    // vm-server에서 조직도 가져오기
+    const cookie = getVmSessionCookie(req);
+    const orgData = await fetchOrgData(cookie);
+    const orgChart = buildOrgChart(orgData);
+
+    if (!orgChart.trim()) {
+      return Response.json({ ok: false, error: '조직이 없습니다. 먼저 조직을 만드세요.' }, { status: 400 });
+    }
+
+    Missions.create({ id, user_id: user.id, task, routing: '[]', parent_mission_id, origin: origin ?? 'user' });
+    Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
+
+    // Claude CLI 실행 디렉토리 결정 (workspace path가 비어있거나 없으면 cwd 사용)
+    const firstWsPath = orgData.workspaces[0]?.path;
+    const cwd = (firstWsPath && firstWsPath.trim() && fs.existsSync(firstWsPath)) ? firstWsPath : process.cwd();
+    const hasImages = savedImages.length > 0;
+    const promptArgs = ['-p', buildRoutingPrompt(orgChart, task, hasImages)];
+    if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
+
+    setImmediate(() => {
+      execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV },
+        (err, stdout) => {
+          if (err) { Missions.update(id, { status: 'routing_failed', result: claudeSpawnError(err) }); return; }
+          try {
+            // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
+            let parsed: any;
+            const text = stdout.trim();
+            // 1차 시도: 코드 펜스 제거 후 파싱
+            const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+            try { parsed = JSON.parse(cleaned); } catch {
+              // 2차 시도: 첫 { 부터 마지막 } 까지 추출
+              const start = text.indexOf('{');
+              const end = text.lastIndexOf('}');
+              if (start === -1 || end === -1 || end <= start) throw new Error('JSON 없음');
+              parsed = JSON.parse(text.slice(start, end + 1));
+            }
+
+            const routing = parsed.routing || [];
+            if (!Array.isArray(routing) || routing.length === 0) {
+              Missions.update(id, { status: 'routing_failed' }); return;
+            }
+
+            for (const orgName of (parsed.new_org_needed || [])) {
+              Notifications.create({ id: randomUUID(), user_id: user.id, type: 'org_needed',
+                title: `${orgName} 생성 권장`, message: `미션에서 ${orgName}이(가) 필요합니다.`, read: 0 });
+            }
+
+            Missions.update(id, {
+              routing: JSON.stringify(routing),
+              status: parsed.needs_clarification ? 'needs_clarification' : 'routed',
+              steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
+                clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [],
+                is_recurring: parsed.is_recurring || false, schedule_name: parsed.schedule_name || null,
+                cron_expr: parsed.cron_expr || null }),
+            });
+
+            // 반복 미션이면 스케줄 생성
+            if (parsed.is_recurring && parsed.cron_expr && !parsed.needs_clarification) {
+              try {
+                const interval = cronParser.parseExpression(parsed.cron_expr);
+                const nextTs = Math.floor(interval.next().getTime() / 1000);
+                MissionSchedules.create({
+                  id: randomUUID(),
+                  user_id: user.id,
+                  name: parsed.schedule_name || task.slice(0, 60),
+                  cron_expr: parsed.cron_expr,
+                  task,
+                  routing: JSON.stringify(routing),
+                  session_cookie: cookie,
+                  next_run_at: nextTs,
+                });
+              } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
+            }
+          } catch { Missions.update(id, { status: 'routing_failed' }); }
+        }
+      );
+    });
+
+    return Response.json({ ok: true, mission: { id, task, status: 'analyzing', images: savedImages } });
   } catch (err) {
-    return Response.json({ ok: false, error: (err as Error).message }, { status: 400 });
+    console.error('[POST /api/missions] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 생성 중 오류가 발생했습니다' }, { status: 500 });
   }
-
-  // vm-server에서 조직도 가져오기
-  const cookie = getVmSessionCookie(req);
-  const orgData = await fetchOrgData(cookie);
-  const orgChart = buildOrgChart(orgData);
-
-  if (!orgChart.trim()) {
-    return Response.json({ ok: false, error: '조직이 없습니다. 먼저 조직을 만드세요.' }, { status: 400 });
-  }
-
-  Missions.create({ id, user_id: user.id, task, routing: '[]', parent_mission_id, origin: origin ?? 'user' });
-  Missions.update(id, { status: 'analyzing', images: JSON.stringify(savedImages) });
-
-  // Claude CLI 실행 디렉토리 결정 (workspace path가 비어있거나 없으면 cwd 사용)
-  const firstWsPath = orgData.workspaces[0]?.path;
-  const cwd = (firstWsPath && firstWsPath.trim() && fs.existsSync(firstWsPath)) ? firstWsPath : process.cwd();
-  const hasImages = savedImages.length > 0;
-  const promptArgs = ['-p', buildRoutingPrompt(orgChart, task, hasImages)];
-  if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
-
-  setImmediate(() => {
-    execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV },
-      (err, stdout) => {
-        if (err) { Missions.update(id, { status: 'routing_failed', result: claudeSpawnError(err) }); return; }
-        try {
-          // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
-          let parsed: any;
-          const text = stdout.trim();
-          // 1차 시도: 코드 펜스 제거 후 파싱
-          const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-          try { parsed = JSON.parse(cleaned); } catch {
-            // 2차 시도: 첫 { 부터 마지막 } 까지 추출
-            const start = text.indexOf('{');
-            const end = text.lastIndexOf('}');
-            if (start === -1 || end === -1 || end <= start) throw new Error('JSON 없음');
-            parsed = JSON.parse(text.slice(start, end + 1));
-          }
-
-          const routing = parsed.routing || [];
-          if (!Array.isArray(routing) || routing.length === 0) {
-            Missions.update(id, { status: 'routing_failed' }); return;
-          }
-
-          for (const orgName of (parsed.new_org_needed || [])) {
-            Notifications.create({ id: randomUUID(), user_id: user.id, type: 'org_needed',
-              title: `${orgName} 생성 권장`, message: `미션에서 ${orgName}이(가) 필요합니다.`, read: 0 });
-          }
-
-          Missions.update(id, {
-            routing: JSON.stringify(routing),
-            status: parsed.needs_clarification ? 'needs_clarification' : 'routed',
-            steps: JSON.stringify({ summary: parsed.summary, needs_clarification: parsed.needs_clarification || false,
-              clarification: parsed.clarification || null, new_org_needed: parsed.new_org_needed || [],
-              is_recurring: parsed.is_recurring || false, schedule_name: parsed.schedule_name || null,
-              cron_expr: parsed.cron_expr || null }),
-          });
-
-          // 반복 미션이면 스케줄 생성
-          if (parsed.is_recurring && parsed.cron_expr && !parsed.needs_clarification) {
-            try {
-              const interval = cronParser.parseExpression(parsed.cron_expr);
-              const nextTs = Math.floor(interval.next().getTime() / 1000);
-              MissionSchedules.create({
-                id: randomUUID(),
-                user_id: user.id,
-                name: parsed.schedule_name || task.slice(0, 60),
-                cron_expr: parsed.cron_expr,
-                task,
-                routing: JSON.stringify(routing),
-                session_cookie: cookie,
-                next_run_at: nextTs,
-              });
-            } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
-          }
-        } catch { Missions.update(id, { status: 'routing_failed' }); }
-      }
-    );
-  });
-
-  return Response.json({ ok: true, mission: { id, task, status: 'analyzing', images: savedImages } });
 }
 
 // ── PATCH /api/missions ───────────────────────────────────────────────
 export async function PATCH(req: NextRequest) {
-  const user = await getSession(req);
-  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  try {
+    const user = await getSession(req);
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const { id, extra_routing } = await req.json();
-  const m = Missions.get(id);
-  if (!m || m.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
+    const { id, extra_routing } = await req.json();
+    const m = Missions.get(id);
+    if (!m || m.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
 
-  const merged = [...JSON.parse(m.routing || '[]'), ...(extra_routing || [])];
-  Missions.update(id, { routing: JSON.stringify(merged), status: 'routed' });
-  return Response.json({ ok: true, routing: merged });
+    const merged = [...JSON.parse(m.routing || '[]'), ...(extra_routing || [])];
+    Missions.update(id, { routing: JSON.stringify(merged), status: 'routed' });
+    return Response.json({ ok: true, routing: merged });
+  } catch (err) {
+    console.error('[PATCH /api/missions] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 업데이트 실패' }, { status: 500 });
+  }
 }
 
 // ── DELETE /api/missions?id=xxx ───────────────────────────────────────
 export async function DELETE(req: NextRequest) {
-  const user = await getSession(req);
-  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  try {
+    const user = await getSession(req);
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const id = new URL(req.url).searchParams.get('id');
-  if (!id) return Response.json({ ok: false, error: 'id required' }, { status: 400 });
+    const id = new URL(req.url).searchParams.get('id');
+    if (!id) return Response.json({ ok: false, error: 'id required' }, { status: 400 });
 
-  const m = Missions.get(id);
-  if (!m || m.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
+    const m = Missions.get(id);
+    if (!m || m.user_id !== user.id) return Response.json({ ok: false, error: '없음' }, { status: 404 });
 
-  const imagesDir = path.join(process.env.DATA_DIR || path.join(process.cwd(), '.data'), 'users', user.id, 'missions', id, 'images');
-  if (fs.existsSync(imagesDir)) fs.rmSync(imagesDir, { recursive: true, force: true });
+    const imagesDir = path.join(process.env.DATA_DIR || path.join(process.cwd(), '.data'), 'users', user.id, 'missions', id, 'images');
+    if (fs.existsSync(imagesDir)) fs.rmSync(imagesDir, { recursive: true, force: true });
 
-  Missions.delete(id);
-  return Response.json({ ok: true });
+    Missions.delete(id);
+    return Response.json({ ok: true });
+  } catch (err) {
+    console.error('[DELETE /api/missions] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 삭제 실패' }, { status: 500 });
+  }
 }
 
 // ── 라우팅 프롬프트 ───────────────────────────────────────────────────

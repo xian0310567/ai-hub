@@ -45,6 +45,7 @@ async function vmPost(path: string, body: object, cookie: string) {
 
 // ── POST /api/missions/[id]/run ───────────────────────────────────────
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
@@ -188,6 +189,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   return new Response(stream, {
     headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
   });
+  } catch (err) {
+    console.error('[POST /api/missions/:id/run] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 실행 준비 중 오류가 발생했습니다' }, { status: 500 });
+  }
 }
 
 // ── Human Gate 승인 대기 ──────────────────────────────────────────────

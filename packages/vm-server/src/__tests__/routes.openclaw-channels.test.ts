@@ -256,6 +256,158 @@ describe('Channel config in sync output', () => {
     expect(telegramBinding.agentId).toBe('orchestrator');
   });
 
+  it('routes channel to target agent when target_agent_id is set', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const pool = getPool();
+
+    // 워크스페이스 + 팀 + 에이전트 생성
+    const divId = newId();
+    const wsId = newId();
+    const teamId = newId();
+    const agentId = newId();
+
+    await pool.query('INSERT INTO divisions(id,org_id,name,ws_path) VALUES($1,$2,$3,$4)', [divId, orgId, 'Div', '/tmp']);
+    await pool.query('INSERT INTO workspaces(id,org_id,division_id,name,path) VALUES($1,$2,$3,$4,$5)', [wsId, orgId, divId, 'WS', '/tmp/ws']);
+    await pool.query('INSERT INTO teams(id,org_id,workspace_id,name) VALUES($1,$2,$3,$4)', [teamId, orgId, wsId, '지원팀']);
+    await pool.query(
+      `INSERT INTO agents(id,org_id,workspace_id,team_id,org_level,is_lead,name,soul,command_name,harness_pattern,model)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [agentId, orgId, wsId, teamId, 'worker', false, '지원봇', '', 'support-bot', 'single', 'claude-sonnet-4-6'],
+    );
+
+    // 채널 생성 시 target_agent_id 지정
+    await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { channel_type: 'telegram', config: {}, target_agent_id: agentId },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/config',
+      headers: { Cookie: cookie },
+    });
+
+    const config = res.json().config;
+    const bindings = config.bindings;
+    const telegramBinding = bindings.find(
+      (b: { match: { channel: string } }) => b.match.channel === 'telegram',
+    );
+    expect(telegramBinding).toBeDefined();
+    // target_agent_id가 설정되었으므로 orchestrator가 아닌 해당 에이전트로 라우팅
+    expect(telegramBinding.agentId).not.toBe('orchestrator');
+    // 실제 agent list에 존재하는 ID로 라우팅됨
+    const targetInList = config.agents.list.find(
+      (a: { id: string }) => a.id === telegramBinding.agentId,
+    );
+    expect(targetInList).toBeDefined();
+  });
+
+  it('falls back to orchestrator when target_agent_id agent not found in config', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const pool = getPool();
+
+    // 에이전트를 생성하되 팀 미소속 + division 레벨로 만들어서 standalone이 아닌 경우
+    const agentId = newId();
+    await pool.query(
+      `INSERT INTO agents(id,org_id,org_level,name,model) VALUES($1,$2,$3,$4,$5)`,
+      [agentId, orgId, 'worker', '테스트봇', 'claude-sonnet-4-6'],
+    );
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { channel_type: 'discord', config: {}, target_agent_id: agentId },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/config',
+      headers: { Cookie: cookie },
+    });
+
+    const bindings = res.json().config.bindings;
+    const discordBinding = bindings.find(
+      (b: { match: { channel: string } }) => b.match.channel === 'discord',
+    );
+    expect(discordBinding).toBeDefined();
+    // standalone agent이므로 config에 존재 → 직접 라우팅
+    expect(discordBinding.agentId).toBe('테스트봇');
+  });
+
+  it('rejects invalid target_agent_id on create (400)', async () => {
+    const { cookie } = await seedUser({ role: 'org_admin' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { channel_type: 'telegram', config: {}, target_agent_id: 'nonexistent' },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('can update target_agent_id via PATCH', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const pool = getPool();
+
+    const agentId = newId();
+    await pool.query(
+      `INSERT INTO agents(id,org_id,org_level,name,model) VALUES($1,$2,$3,$4,$5)`,
+      [agentId, orgId, 'worker', 'PatchBot', 'claude-sonnet-4-6'],
+    );
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { channel_type: 'slack', config: {} },
+    });
+    const channelId = createRes.json().id;
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { id: channelId, target_agent_id: agentId },
+    });
+
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json().target_agent_id).toBe(agentId);
+  });
+
+  it('can clear target_agent_id by setting null', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const pool = getPool();
+
+    const agentId = newId();
+    await pool.query(
+      `INSERT INTO agents(id,org_id,org_level,name,model) VALUES($1,$2,$3,$4,$5)`,
+      [agentId, orgId, 'worker', 'NullBot', 'claude-sonnet-4-6'],
+    );
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { channel_type: 'web', config: {}, target_agent_id: agentId },
+    });
+    const channelId = createRes.json().id;
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/openclaw/channels',
+      headers: { Cookie: cookie },
+      payload: { id: channelId, target_agent_id: null },
+    });
+
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json().target_agent_id).toBeNull();
+  });
+
   it('disabled channels are excluded from config', async () => {
     const { cookie } = await seedUser({ role: 'org_admin' });
 

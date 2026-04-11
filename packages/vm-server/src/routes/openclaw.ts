@@ -12,6 +12,8 @@ import {
   generateOpenClawConfig,
   materializeOpenClawWorkspace,
   getStoredOpenClawConfig,
+  getOpenClawConfigDiff,
+  selectiveMaterializeOpenClawWorkspace,
 } from '../services/openclaw-sync.js';
 
 export async function openclawRoutes(app: FastifyInstance) {
@@ -61,6 +63,45 @@ export async function openclawRoutes(app: FastifyInstance) {
         ok: true,
         runtimeDir: result.runtimeDir,
         agentCount: result.agentCount,
+        config: result.config,
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ ok: false, error: message });
+    }
+  });
+
+  /**
+   * GET /api/openclaw/diff
+   * 저장된 설정과 현재 DB 상태의 차이 비교
+   */
+  app.get('/diff', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+
+    try {
+      const diff = await getOpenClawConfigDiff(user.orgId);
+      return { ok: true, diff };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ ok: false, error: message });
+    }
+  });
+
+  /**
+   * POST /api/openclaw/selective-sync
+   * 변경된 부분만 선택적으로 업데이트
+   */
+  app.post('/selective-sync', async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    if (!requireRole(user, ['org_admin', 'team_admin'], reply)) return;
+
+    try {
+      const result = await selectiveMaterializeOpenClawWorkspace(user.orgId);
+      return {
+        ok: true,
+        runtimeDir: result.runtimeDir,
+        agentCount: result.agentCount,
+        diff: result.diff,
         config: result.config,
       };
     } catch (err: unknown) {

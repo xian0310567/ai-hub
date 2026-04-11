@@ -6,6 +6,7 @@
  */
 
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
 import { isGatewayAvailable } from './openclaw-client.js';
 
 // ── 상태 ──────────────────────────────────────────────────────────────
@@ -19,6 +20,36 @@ let _restartCount = 0;
 const MAX_RESTARTS = 5;
 const HEALTH_CHECK_INTERVAL_MS = 15_000;
 const STARTUP_TIMEOUT_MS = 10_000;
+
+// ── 로그 스트리밍 ──────────────────────────────────────────────���─────
+
+export interface GatewayLogEntry {
+  ts: number;
+  stream: 'stdout' | 'stderr';
+  line: string;
+}
+
+export const gatewayLogs = new EventEmitter();
+const LOG_BUFFER_SIZE = 500;
+const _logBuffer: GatewayLogEntry[] = [];
+
+function pushLog(stream: 'stdout' | 'stderr', chunk: Buffer): void {
+  const lines = chunk.toString().split('\n').filter(Boolean);
+  for (const line of lines) {
+    const entry: GatewayLogEntry = { ts: Date.now(), stream, line };
+    _logBuffer.push(entry);
+    if (_logBuffer.length > LOG_BUFFER_SIZE) _logBuffer.shift();
+    gatewayLogs.emit('log', entry);
+  }
+}
+
+export function getLogBuffer(): GatewayLogEntry[] {
+  return [..._logBuffer];
+}
+
+export function clearLogBuffer(): void {
+  _logBuffer.length = 0;
+}
 
 // ── 설정 ──────────────────────────────────────────────────────────────
 
@@ -115,6 +146,10 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
         NODE_ENV: process.env.NODE_ENV,
       },
     });
+
+    // stdout/stderr 로그 캡처
+    _process.stdout?.on('data', (chunk: Buffer) => pushLog('stdout', chunk));
+    _process.stderr?.on('data', (chunk: Buffer) => pushLog('stderr', chunk));
 
     _process.on('exit', (code) => {
       _state = 'stopped';
@@ -215,5 +250,30 @@ function stopHealthCheck(): void {
   if (_healthCheckInterval) {
     clearInterval(_healthCheckInterval);
     _healthCheckInterval = null;
+  }
+}
+
+// ── Auto Start ───────────────────────────────────────────────────────
+
+/**
+ * 설정에 따라 Gateway를 자동 시작한다.
+ * server.ts 부팅 시 호출된다.
+ */
+export async function initGatewayAutoStart(): Promise<void> {
+  try {
+    // 동적 import로 순환 의존 방지 — Settings는 db.ts에 있음
+    const { Settings } = await import('./db.js');
+    const autoStart = Settings.get('gateway_auto_start');
+    if (autoStart === 'true') {
+      console.log('[Gateway] 자동 시작 설정 감지 — 시작 시도');
+      const result = await startGateway();
+      if (result.ok) {
+        console.log(`[Gateway] 자동 시작 성공 (${result.reason ?? 'started'})`);
+      } else {
+        console.warn(`[Gateway] 자동 시작 실패: ${result.reason}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[Gateway] 자동 시작 초기화 오류:', err instanceof Error ? err.message : err);
   }
 }

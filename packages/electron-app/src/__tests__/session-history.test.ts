@@ -5,10 +5,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
+const { mockFetch, mockGetSessionHistory, mockChatLogs } = vi.hoisted(() => ({
+  mockFetch: vi.fn(),
+  mockGetSessionHistory: vi.fn(),
+  mockChatLogs: {
+    add: vi.fn(),
+    clear: vi.fn(),
+    list: vi.fn().mockReturnValue([]),
+    sessions: vi.fn().mockReturnValue([]),
+    sessionMessages: vi.fn().mockReturnValue([]),
+    sessionsFiltered: vi.fn().mockReturnValue([]),
+    search: vi.fn().mockReturnValue([]),
+    deleteSession: vi.fn(),
+    exportSession: vi.fn().mockReturnValue({ agentId: 'a1', sessionKey: null, messages: [] }),
+  },
+}));
 
-const mockGetSessionHistory = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
 
 vi.mock('../lib/openclaw-client.js', () => ({
   getSessionHistory: (key: string, limit?: number) => mockGetSessionHistory(key, limit),
@@ -22,13 +35,7 @@ vi.mock('../lib/auth.js', () => ({
 }));
 
 vi.mock('../lib/db.js', () => ({
-  ChatLogs: {
-    add: vi.fn(),
-    clear: vi.fn(),
-    list: vi.fn().mockReturnValue([]),
-    sessions: vi.fn().mockReturnValue([]),
-    sessionMessages: vi.fn().mockReturnValue([]),
-  },
+  ChatLogs: mockChatLogs,
 }));
 
 import { ChatLogs } from '../lib/db.js';
@@ -37,7 +44,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// ── ChatLogs sessions ─────────────────────────────────────────────────
+// ── ChatLogs sessions ───────────────────────────────────────────────��─
 
 describe('ChatLogs.sessions', () => {
   it('returns empty array when no sessions', () => {
@@ -47,7 +54,7 @@ describe('ChatLogs.sessions', () => {
   });
 
   it('returns session list with correct shape', () => {
-    (ChatLogs.sessions as ReturnType<typeof vi.fn>).mockReturnValueOnce([
+    mockChatLogs.sessions.mockReturnValueOnce([
       { agent_id: 'agent-1', session_key: 'user-1:agent-1', last_at: 1712700000, msg_count: 10 },
       { agent_id: 'agent-2', session_key: null, last_at: 1712699000, msg_count: 5 },
     ]);
@@ -69,7 +76,7 @@ describe('ChatLogs.sessionMessages', () => {
       { id: '1', user_id: 'u1', agent_id: 'a1', role: 'user', content: 'Hello', session_key: 'key1', created_at: 1712700000 },
       { id: '2', user_id: 'u1', agent_id: 'a1', role: 'assistant', content: 'Hi!', session_key: 'key1', created_at: 1712700010 },
     ];
-    (ChatLogs.sessionMessages as ReturnType<typeof vi.fn>).mockReturnValueOnce(msgs);
+    mockChatLogs.sessionMessages.mockReturnValueOnce(msgs);
 
     const result = ChatLogs.sessionMessages('u1', 'a1', 'key1');
     expect(result).toHaveLength(2);
@@ -114,6 +121,87 @@ describe('ChatLogs.add with session_key', () => {
       id: 'log-2',
       role: 'assistant',
     }));
+  });
+});
+
+// ── ChatLogs.sessionsFiltered ─────────────────────────────────────────
+
+describe('ChatLogs.sessionsFiltered', () => {
+  it('filters by agent_id', () => {
+    mockChatLogs.sessionsFiltered.mockReturnValueOnce([
+      { agent_id: 'a1', session_key: 'key1', last_at: 1712700000, msg_count: 5 },
+    ]);
+
+    const result = ChatLogs.sessionsFiltered('u1', { agentId: 'a1' });
+    expect(result).toHaveLength(1);
+    expect(ChatLogs.sessionsFiltered).toHaveBeenCalledWith('u1', { agentId: 'a1' });
+  });
+
+  it('filters by date range', () => {
+    ChatLogs.sessionsFiltered('u1', { from: 1712600000, to: 1712700000 });
+    expect(ChatLogs.sessionsFiltered).toHaveBeenCalledWith('u1', { from: 1712600000, to: 1712700000 });
+  });
+
+  it('combines agent_id and date range', () => {
+    ChatLogs.sessionsFiltered('u1', { agentId: 'a1', from: 1712600000, to: 1712700000 });
+    expect(ChatLogs.sessionsFiltered).toHaveBeenCalledWith('u1', {
+      agentId: 'a1', from: 1712600000, to: 1712700000,
+    });
+  });
+});
+
+// ── ChatLogs.search ───────────────────────────────────────────────────
+
+describe('ChatLogs.search', () => {
+  it('returns matching messages', () => {
+    const matches = [
+      { id: '1', user_id: 'u1', agent_id: 'a1', role: 'user', content: 'deploy 방법', session_key: 'key1', created_at: 1712700000 },
+    ];
+    mockChatLogs.search.mockReturnValueOnce(matches);
+
+    const result = ChatLogs.search('u1', 'deploy');
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toContain('deploy');
+  });
+
+  it('returns empty array when no match', () => {
+    mockChatLogs.search.mockReturnValueOnce([]);
+    const result = ChatLogs.search('u1', 'nonexistent');
+    expect(result).toEqual([]);
+  });
+});
+
+// ── ChatLogs.deleteSession ────────────────────────────────────────────
+
+describe('ChatLogs.deleteSession', () => {
+  it('deletes session with session_key', () => {
+    ChatLogs.deleteSession('u1', 'a1', 'key1');
+    expect(ChatLogs.deleteSession).toHaveBeenCalledWith('u1', 'a1', 'key1');
+  });
+
+  it('deletes session without session_key (null sessions)', () => {
+    ChatLogs.deleteSession('u1', 'a1');
+    expect(ChatLogs.deleteSession).toHaveBeenCalledWith('u1', 'a1');
+  });
+});
+
+// ── ChatLogs.exportSession ────────────────────────────────────────────
+
+describe('ChatLogs.exportSession', () => {
+  it('exports session as JSON object', () => {
+    mockChatLogs.exportSession.mockReturnValueOnce({
+      agentId: 'a1',
+      sessionKey: 'key1',
+      messages: [
+        { id: '1', role: 'user', content: 'hello' },
+        { id: '2', role: 'assistant', content: 'hi' },
+      ],
+    });
+
+    const result = ChatLogs.exportSession('u1', 'a1', 'key1');
+    expect(result.agentId).toBe('a1');
+    expect(result.sessionKey).toBe('key1');
+    expect(result.messages).toHaveLength(2);
   });
 });
 

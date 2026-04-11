@@ -77,6 +77,7 @@ interface DbChannel {
   channel_type: string;
   config: string;
   enabled: boolean;
+  target_agent_id: string | null;
 }
 
 /** OpenClaw 채널 설정 */
@@ -195,6 +196,8 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
   // OpenClaw 에이전트 리스트 생성
   const agentList: OpenClawAgentEntry[] = [];
   const allTeamIds: string[] = [];
+  // DB agent.id → OpenClaw agentId 매핑 (채널 라우팅용)
+  const dbIdToClawId = new Map<string, string>();
 
   // agentId 충돌 방지 (예: "Dev-Team"과 "Dev Team" 모두 "dev-team"으로 변환됨)
   const usedIds = new Set<string>();
@@ -248,10 +251,14 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
       },
     });
 
+    // 리드 에이전트의 DB ID 매핑
+    if (teamLead) dbIdToClawId.set(teamLead.id, teamAgentId);
+
     // 팀 하위 에이전트들
     for (const member of members) {
       if (member.is_lead) continue; // 리드는 이미 팀 대표로 등록됨
       const memberId = uniqueAgentId(member.command_name, member.name);
+      dbIdToClawId.set(member.id, memberId);
 
       agentList.push({
         id: memberId,
@@ -269,6 +276,7 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
   );
   for (const agent of standaloneAgents) {
     const agentId = uniqueAgentId(agent.command_name, agent.name);
+    dbIdToClawId.set(agent.id, agentId);
     allTeamIds.push(agentId);
 
     agentList.push({
@@ -296,8 +304,19 @@ export async function generateOpenClawConfig(orgId: string): Promise<GeneratedOp
     try {
       const cfg = JSON.parse(ch.config);
       channelConfig[ch.channel_type] = cfg;
-      // 각 채널도 오케스트레이터로 라우팅
-      bindings.push({ agentId: orchestratorId, match: { channel: ch.channel_type } });
+
+      // target_agent_id가 지정되어 있고 config에 존재하면 직접 라우팅
+      let targetId = orchestratorId;
+      if (ch.target_agent_id) {
+        const resolved = dbIdToClawId.get(ch.target_agent_id);
+        if (resolved && agentList.some(a => a.id === resolved)) {
+          targetId = resolved;
+        } else {
+          console.warn(`[OpenClaw Sync] 채널 ${ch.channel_type}: target_agent_id(${ch.target_agent_id}) 미발견, orchestrator 폴백`);
+        }
+      }
+
+      bindings.push({ agentId: targetId, match: { channel: ch.channel_type } });
     } catch (err) {
       console.warn(`[OpenClaw Sync] 채널 ${ch.channel_type} config 파싱 실패, 건너뜀:`, err);
       // binding 추가 안 함 — config 없는 binding은 무의미
@@ -508,4 +527,261 @@ export async function getStoredOpenClawConfig(orgId: string): Promise<{
     runtimeDir: row.runtime_dir,
     version: row.version,
   };
+}
+
+// ── Config Diff ──────────────────────────────────────────────────────
+
+export interface AgentChange {
+  agentId: string;
+  changes: Array<{ field: string; old: string; new: string }>;
+}
+
+export interface ConfigDiff {
+  agents: {
+    added: OpenClawAgentEntry[];
+    removed: OpenClawAgentEntry[];
+    modified: AgentChange[];
+    unchanged: string[];
+  };
+  bindings: {
+    added: OpenClawBinding[];
+    removed: OpenClawBinding[];
+  };
+  channels: {
+    added: string[];
+    removed: string[];
+    modified: string[];
+  };
+  hasChanges: boolean;
+}
+
+/**
+ * 저장된 설정과 새로 생성된 설정을 비교하여 diff를 반환한다.
+ */
+export function diffOpenClawConfig(
+  stored: GeneratedOpenClawConfig | undefined,
+  generated: GeneratedOpenClawConfig,
+): ConfigDiff {
+  if (!stored) {
+    return {
+      agents: {
+        added: generated.agents.list,
+        removed: [],
+        modified: [],
+        unchanged: [],
+      },
+      bindings: { added: generated.bindings, removed: [] },
+      channels: {
+        added: Object.keys(generated.channels ?? {}),
+        removed: [],
+        modified: [],
+      },
+      hasChanges: true,
+    };
+  }
+
+  // Agent diff
+  const storedAgentMap = new Map(stored.agents.list.map(a => [a.id, a]));
+  const genAgentMap = new Map(generated.agents.list.map(a => [a.id, a]));
+
+  const addedAgents: OpenClawAgentEntry[] = [];
+  const removedAgents: OpenClawAgentEntry[] = [];
+  const modifiedAgents: AgentChange[] = [];
+  const unchangedAgents: string[] = [];
+
+  for (const [id, agent] of genAgentMap) {
+    const old = storedAgentMap.get(id);
+    if (!old) {
+      addedAgents.push(agent);
+      continue;
+    }
+    const changes = diffAgent(old, agent);
+    if (changes.length > 0) {
+      modifiedAgents.push({ agentId: id, changes });
+    } else {
+      unchangedAgents.push(id);
+    }
+  }
+  for (const [id, agent] of storedAgentMap) {
+    if (!genAgentMap.has(id)) removedAgents.push(agent);
+  }
+
+  // Binding diff
+  const bindKey = (b: OpenClawBinding) => `${b.agentId}:${b.match.channel}`;
+  const storedBindings = new Set(stored.bindings.map(bindKey));
+  const genBindings = new Set(generated.bindings.map(bindKey));
+
+  const addedBindings = generated.bindings.filter(b => !storedBindings.has(bindKey(b)));
+  const removedBindings = stored.bindings.filter(b => !genBindings.has(bindKey(b)));
+
+  // Channel diff
+  const storedCh = stored.channels ?? {};
+  const genCh = generated.channels ?? {};
+  const allChKeys = new Set([...Object.keys(storedCh), ...Object.keys(genCh)]);
+
+  const addedCh: string[] = [];
+  const removedCh: string[] = [];
+  const modifiedCh: string[] = [];
+
+  for (const key of allChKeys) {
+    if (!(key in storedCh)) { addedCh.push(key); continue; }
+    if (!(key in genCh)) { removedCh.push(key); continue; }
+    if (JSON.stringify(storedCh[key]) !== JSON.stringify(genCh[key])) modifiedCh.push(key);
+  }
+
+  const hasChanges = addedAgents.length > 0 || removedAgents.length > 0
+    || modifiedAgents.length > 0 || addedBindings.length > 0 || removedBindings.length > 0
+    || addedCh.length > 0 || removedCh.length > 0 || modifiedCh.length > 0;
+
+  return {
+    agents: { added: addedAgents, removed: removedAgents, modified: modifiedAgents, unchanged: unchangedAgents },
+    bindings: { added: addedBindings, removed: removedBindings },
+    channels: { added: addedCh, removed: removedCh, modified: modifiedCh },
+    hasChanges,
+  };
+}
+
+function diffAgent(old: OpenClawAgentEntry, cur: OpenClawAgentEntry): Array<{ field: string; old: string; new: string }> {
+  const changes: Array<{ field: string; old: string; new: string }> = [];
+
+  if (old.name !== cur.name) changes.push({ field: 'name', old: old.name, new: cur.name });
+  if (old.workspace !== cur.workspace) changes.push({ field: 'workspace', old: old.workspace ?? '', new: cur.workspace ?? '' });
+
+  const oldModel = old.model?.primary ?? '';
+  const curModel = cur.model?.primary ?? '';
+  if (oldModel !== curModel) changes.push({ field: 'model', old: oldModel, new: curModel });
+
+  const oldAllow = JSON.stringify(old.subagents?.allowAgents ?? []);
+  const curAllow = JSON.stringify(cur.subagents?.allowAgents ?? []);
+  if (oldAllow !== curAllow) changes.push({ field: 'allowAgents', old: oldAllow, new: curAllow });
+
+  const oldRuntime = old.runtime?.type ?? '';
+  const curRuntime = cur.runtime?.type ?? '';
+  if (oldRuntime !== curRuntime) changes.push({ field: 'runtime', old: oldRuntime, new: curRuntime });
+
+  return changes;
+}
+
+// ── Selective Materialize ────────────────────────────────────────────
+
+/**
+ * 변경된 부분만 선택적으로 업데이트한다.
+ * 저장된 config가 없으면 전체 materialize로 폴백.
+ */
+export async function selectiveMaterializeOpenClawWorkspace(orgId: string): Promise<{
+  runtimeDir: string;
+  config: GeneratedOpenClawConfig;
+  agentCount: number;
+  diff: ConfigDiff;
+}> {
+  // org별 sync lock
+  while (syncLocks.has(orgId)) {
+    await syncLocks.get(orgId);
+  }
+
+  let releaseLock: () => void;
+  syncLocks.set(orgId, new Promise(r => { releaseLock = r; }));
+
+  try {
+    const stored = await getStoredOpenClawConfig(orgId);
+    const config = await generateOpenClawConfig(orgId);
+    const diff = diffOpenClawConfig(stored?.config, config);
+    const runtimeDir = resolveRuntimeDir(orgId);
+
+    if (!stored || !fs.existsSync(runtimeDir)) {
+      // 최초 sync — 전체 materialize
+      const result = await _materializeOpenClawWorkspaceInner(orgId);
+      return { ...result, diff };
+    }
+
+    if (!diff.hasChanges) {
+      // 변경 없음 — config만 갱신
+      const agents = await qall<DbAgent>(
+        'SELECT * FROM agents WHERE org_id = ? ORDER BY created_at', [orgId],
+      );
+      return { runtimeDir, config, agentCount: agents.length, diff };
+    }
+
+    // 선택적 업데이트
+    const agents = await qall<DbAgent>(
+      'SELECT * FROM agents WHERE org_id = ? ORDER BY created_at', [orgId],
+    );
+    const teams = await qall<DbTeam>(
+      'SELECT * FROM teams WHERE org_id = ? ORDER BY order_index', [orgId],
+    );
+    const teamMap = new Map<string, DbTeam>();
+    for (const t of teams) teamMap.set(t.id, t);
+
+    // openclaw.json은 항상 재작성
+    fs.writeFileSync(
+      path.join(runtimeDir, 'openclaw.json'),
+      JSON.stringify(config, null, 2),
+      'utf8',
+    );
+
+    // 삭제된 에이전트 디렉토리 제거
+    for (const removed of diff.agents.removed) {
+      const agentDir = path.join(runtimeDir, removed.id);
+      if (fs.existsSync(agentDir)) {
+        fs.rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+
+    // 추가/수정된 에이전트 파일 갱신
+    const agentsToUpdate = [
+      ...diff.agents.added,
+      ...diff.agents.modified.map(m => config.agents.list.find(a => a.id === m.agentId)!),
+    ].filter(Boolean);
+
+    for (const clawAgent of agentsToUpdate) {
+      const dbAgent = agents.find(a => {
+        const cId = toAgentId(a.command_name, a.name);
+        return cId === clawAgent.id || clawAgent.id.startsWith(cId);
+      });
+      if (!dbAgent) continue;
+
+      let agentDir: string;
+      if (dbAgent.org_level === 'division' || dbAgent.org_level === 'department') {
+        agentDir = path.join(runtimeDir, 'orchestrator');
+      } else if (dbAgent.team_id) {
+        const team = teamMap.get(dbAgent.team_id);
+        agentDir = path.join(runtimeDir, toAgentId(null, team?.name ?? dbAgent.team_id));
+      } else {
+        agentDir = path.join(runtimeDir, toAgentId(dbAgent.command_name, dbAgent.name));
+      }
+
+      fs.mkdirSync(path.join(agentDir, '.claude', 'agents'), { recursive: true });
+
+      if (dbAgent.is_lead || !dbAgent.team_id) {
+        fs.writeFileSync(path.join(agentDir, 'SOUL.md'), dbAgent.soul || '', 'utf8');
+      }
+
+      const cmdName = toAgentId(dbAgent.command_name, dbAgent.name);
+      const mdContent = [
+        '---', `name: ${cmdName}`, `description: "${dbAgent.name}"`, '---', '', dbAgent.soul || '',
+      ].join('\n');
+      fs.writeFileSync(path.join(agentDir, '.claude', 'agents', `${cmdName}.md`), mdContent, 'utf8');
+    }
+
+    // DB 업데이트
+    const now = Math.floor(Date.now() / 1000);
+    await exec(
+      'UPDATE openclaw_configs SET config = ?, runtime_dir = ?, version = version + 1, updated_at = ? WHERE org_id = ?',
+      [JSON.stringify(config), runtimeDir, now, orgId],
+    );
+
+    return { runtimeDir, config, agentCount: agents.length, diff };
+  } finally {
+    syncLocks.delete(orgId);
+    releaseLock!();
+  }
+}
+
+/**
+ * 저장된 config와 현재 DB 상태의 diff를 반환한다 (sync 없이).
+ */
+export async function getOpenClawConfigDiff(orgId: string): Promise<ConfigDiff> {
+  const stored = await getStoredOpenClawConfig(orgId);
+  const generated = await generateOpenClawConfig(orgId);
+  return diffOpenClawConfig(stored?.config, generated);
 }

@@ -264,12 +264,13 @@ export async function initSchema(): Promise<void> {
 
     // ── OpenClaw 채널 설정 ────────────────────────────────────────────
     `CREATE TABLE IF NOT EXISTS openclaw_channels (
-      id           TEXT PRIMARY KEY,
-      org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      channel_type TEXT NOT NULL,
-      config       TEXT NOT NULL DEFAULT '{}',
-      enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at   BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+      id              TEXT PRIMARY KEY,
+      org_id          TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      channel_type    TEXT NOT NULL,
+      config          TEXT NOT NULL DEFAULT '{}',
+      enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+      target_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      created_at      BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
       UNIQUE(org_id, channel_type)
     )`,
 

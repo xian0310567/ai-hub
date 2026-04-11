@@ -3,8 +3,14 @@
  *
  * GET /api/sessions
  *   - 사용자의 대화 세션 목록 반환
- *   - ?agent_id=xxx 로 특정 에이전트 필터링
- *   - ?session_key=xxx 로 특정 세션 메시지 조회
+ *   - ?agent_id=xxx     에이전트별 필터
+ *   - ?session_key=xxx  특정 세션 메시지 조회
+ *   - ?q=검색어          전문 검색
+ *   - ?from=epoch&to=epoch  날짜 범위 필터
+ *   - ?export=1&agent_id=xxx&session_key=xxx  세션 내보내기
+ *
+ * DELETE /api/sessions
+ *   - { agent_id, session_key? }  세션 삭제
  */
 
 import { NextRequest } from 'next/server';
@@ -22,6 +28,22 @@ export async function GET(req: NextRequest) {
   const agentId = url.searchParams.get('agent_id');
   const sessionKey = url.searchParams.get('session_key');
   const source = url.searchParams.get('source'); // 'local' | 'gateway' | undefined
+  const query = url.searchParams.get('q');
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  const isExport = url.searchParams.get('export') === '1';
+
+  // 세션 내보내기
+  if (isExport && agentId) {
+    const data = ChatLogs.exportSession(user.id, agentId, sessionKey ?? undefined);
+    return Response.json({ ok: true, ...data });
+  }
+
+  // 전문 검색
+  if (query) {
+    const results = ChatLogs.search(user.id, query);
+    return Response.json({ ok: true, query, results });
+  }
 
   // 특정 세션의 메시지 조회
   if (agentId && sessionKey) {
@@ -54,6 +76,16 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  // 필터링된 세션 목록
+  if (agentId || from || to) {
+    const sessions = ChatLogs.sessionsFiltered(user.id, {
+      agentId: agentId ?? undefined,
+      from: from ? parseInt(from, 10) : undefined,
+      to: to ? parseInt(to, 10) : undefined,
+    });
+    return Response.json({ ok: true, sessions });
+  }
+
   // 세션 목록 반환
   const sessions = ChatLogs.sessions(user.id);
 
@@ -61,4 +93,19 @@ export async function GET(req: NextRequest) {
     ok: true,
     sessions,
   });
+}
+
+export async function DELETE(req: NextRequest) {
+  const user = await getSession(req);
+  if (!user) {
+    return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { agent_id, session_key } = await req.json();
+  if (!agent_id) {
+    return Response.json({ ok: false, error: 'agent_id required' }, { status: 400 });
+  }
+
+  ChatLogs.deleteSession(user.id, agent_id, session_key ?? undefined);
+  return Response.json({ ok: true });
 }

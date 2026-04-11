@@ -134,6 +134,39 @@ try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEF
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 try { db.exec("ALTER TABLE chat_logs ADD COLUMN session_key TEXT"); } catch {}
 
+// FTS5 가상 테이블 (chat_logs 전문 검색용)
+try {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chat_logs_fts
+    USING fts5(content, content=chat_logs, content_rowid=rowid);
+  `);
+  // content-sync 트리거
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS chat_logs_ai AFTER INSERT ON chat_logs BEGIN
+      INSERT INTO chat_logs_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS chat_logs_ad AFTER DELETE ON chat_logs BEGIN
+      INSERT INTO chat_logs_fts(chat_logs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+    END;
+  `);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS chat_logs_au AFTER UPDATE ON chat_logs BEGIN
+      INSERT INTO chat_logs_fts(chat_logs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      INSERT INTO chat_logs_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+  `);
+  // 기존 데이터 FTS 인덱싱 (비어있을 때만)
+  const ftsCount = (db.prepare('SELECT COUNT(*) as cnt FROM chat_logs_fts').get() as { cnt: number })?.cnt ?? 0;
+  if (ftsCount === 0) {
+    const logCount = (db.prepare('SELECT COUNT(*) as cnt FROM chat_logs').get() as { cnt: number })?.cnt ?? 0;
+    if (logCount > 0) {
+      db.exec('INSERT INTO chat_logs_fts(rowid, content) SELECT rowid, content FROM chat_logs');
+    }
+  }
+} catch {}
+
 // 서버 재시작 시 stuck 잡 정리 (핫 리로드 시 중복 실행 방지)
 if (!globalDb.__localDbInitDone) {
   globalDb.__localDbInitDone = true;
@@ -175,6 +208,58 @@ export const ChatLogs = {
     }
     return db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? ORDER BY created_at ASC LIMIT ?')
       .all(userId, agentId, limit) as ChatLog[];
+  },
+
+  /** 에이전트별 필터 + 날짜 범위 세션 목록 */
+  sessionsFiltered: (userId: string, opts: { agentId?: string; from?: number; to?: number; limit?: number }) => {
+    const conditions: string[] = ['user_id=?'];
+    const params: unknown[] = [userId];
+
+    if (opts.agentId) { conditions.push('agent_id=?'); params.push(opts.agentId); }
+    if (opts.from)    { conditions.push('created_at>=?'); params.push(opts.from); }
+    if (opts.to)      { conditions.push('created_at<=?'); params.push(opts.to); }
+
+    const where = conditions.join(' AND ');
+    const limit = opts.limit ?? 50;
+    params.push(limit);
+
+    return db.prepare(`
+      SELECT agent_id, session_key, MAX(created_at) as last_at, COUNT(*) as msg_count
+      FROM chat_logs WHERE ${where}
+      GROUP BY agent_id, session_key
+      ORDER BY last_at DESC LIMIT ?
+    `).all(...params) as ChatSession[];
+  },
+
+  /** FTS5 전문 검색 */
+  search: (userId: string, query: string, limit = 50) => {
+    return db.prepare(`
+      SELECT cl.*
+      FROM chat_logs_fts fts
+      JOIN chat_logs cl ON cl.rowid = fts.rowid
+      WHERE chat_logs_fts MATCH ? AND cl.user_id = ?
+      ORDER BY fts.rank LIMIT ?
+    `).all(query, userId, limit) as ChatLog[];
+  },
+
+  /** 세션 삭제 */
+  deleteSession: (userId: string, agentId: string, sessionKey?: string) => {
+    if (sessionKey) {
+      return db.prepare('DELETE FROM chat_logs WHERE user_id=? AND agent_id=? AND session_key=?')
+        .run(userId, agentId, sessionKey);
+    }
+    return db.prepare('DELETE FROM chat_logs WHERE user_id=? AND agent_id=? AND session_key IS NULL')
+      .run(userId, agentId);
+  },
+
+  /** 세션 내보내기 (JSON) */
+  exportSession: (userId: string, agentId: string, sessionKey?: string): { agentId: string; sessionKey: string | null; messages: ChatLog[] } => {
+    const messages = sessionKey
+      ? db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? AND session_key=? ORDER BY created_at ASC')
+          .all(userId, agentId, sessionKey) as ChatLog[]
+      : db.prepare('SELECT * FROM chat_logs WHERE user_id=? AND agent_id=? AND session_key IS NULL ORDER BY created_at ASC')
+          .all(userId, agentId) as ChatLog[];
+    return { agentId, sessionKey: sessionKey ?? null, messages };
   },
 };
 

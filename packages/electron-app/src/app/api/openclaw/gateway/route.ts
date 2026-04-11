@@ -7,14 +7,19 @@
 
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { getGatewayInfo, startGateway, stopGateway } from '@/lib/gateway-manager';
+import { getGatewayInfo, startGateway, stopGateway, getLogBuffer, clearLogBuffer } from '@/lib/gateway-manager';
 
 export async function GET(req: NextRequest) {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const info = await getGatewayInfo();
-  return Response.json({ ok: true, ...info });
+  const withLogs = new URL(req.url).searchParams.get('logs') === '1';
+  return Response.json({
+    ok: true,
+    ...info,
+    ...(withLogs ? { logs: getLogBuffer() } : {}),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -30,6 +35,11 @@ export async function POST(req: NextRequest) {
 
   if (action === 'stop') {
     stopGateway();
+    return Response.json({ ok: true });
+  }
+
+  if (action === 'clear-logs') {
+    clearLogBuffer();
     return Response.json({ ok: true });
   }
 

@@ -39,10 +39,11 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
 
-    const { channel_type, config, enabled } = req.body as {
+    const { channel_type, config, enabled, target_agent_id } = req.body as {
       channel_type: string;
       config?: Record<string, unknown>;
       enabled?: boolean;
+      target_agent_id?: string | null;
     };
 
     if (!channel_type || !isValidChannel(channel_type)) {
@@ -69,11 +70,21 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'config가 유효한 JSON이 아닙니다' });
     }
 
+    // target_agent_id 유효성 검증
+    if (target_agent_id) {
+      const agent = await q1(
+        'SELECT id FROM agents WHERE id = ? AND org_id = ?', [target_agent_id, user.orgId],
+      );
+      if (!agent) {
+        return reply.code(400).send({ error: '지정된 target_agent_id가 조직 내에 존재하지 않습니다.' });
+      }
+    }
+
     const id = newId();
     await exec(
-      `INSERT INTO openclaw_channels(id, org_id, channel_type, config, enabled)
-       VALUES(?, ?, ?, ?, ?)`,
-      [id, user.orgId, channel_type, configStr, enabled ?? true],
+      `INSERT INTO openclaw_channels(id, org_id, channel_type, config, enabled, target_agent_id)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+      [id, user.orgId, channel_type, configStr, enabled ?? true, target_agent_id ?? null],
     );
 
     return reply.code(201).send(
@@ -89,10 +100,11 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
 
-    const { id, config, enabled } = req.body as {
+    const { id, config, enabled, target_agent_id } = req.body as {
       id: string;
       config?: Record<string, unknown>;
       enabled?: boolean;
+      target_agent_id?: string | null;
     };
 
     if (!id) return reply.code(400).send({ error: 'id required' });
@@ -107,6 +119,17 @@ export async function openclawChannelRoutes(app: FastifyInstance) {
     }
     if (enabled !== undefined) {
       await exec('UPDATE openclaw_channels SET enabled = ? WHERE id = ?', [enabled, id]);
+    }
+    if (target_agent_id !== undefined) {
+      if (target_agent_id !== null) {
+        const agent = await q1(
+          'SELECT id FROM agents WHERE id = ? AND org_id = ?', [target_agent_id, user.orgId],
+        );
+        if (!agent) {
+          return reply.code(400).send({ error: '지정된 target_agent_id가 조직 내에 존재하지 않습니다.' });
+        }
+      }
+      await exec('UPDATE openclaw_channels SET target_agent_id = ? WHERE id = ?', [target_agent_id, id]);
     }
 
     return q1('SELECT * FROM openclaw_channels WHERE id = ? AND org_id = ?', [id, user.orgId]);

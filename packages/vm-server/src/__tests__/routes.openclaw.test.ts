@@ -314,3 +314,153 @@ describe('Orchestrator SOUL generation', () => {
     expect(firstFile).toContain('name:');
   });
 });
+
+// ── GET /api/openclaw/diff ───────────────────────────────────────────
+
+describe('GET /api/openclaw/diff', () => {
+  it('shows all agents as added when no stored config', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    await seedAgents(orgId, cookie);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/diff',
+      headers: { Cookie: cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { diff } = res.json();
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.agents.added.length).toBeGreaterThanOrEqual(3);
+    expect(diff.agents.removed).toHaveLength(0);
+    expect(diff.agents.modified).toHaveLength(0);
+  });
+
+  it('shows no changes after sync', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    await seedAgents(orgId, cookie);
+
+    // sync 실행
+    await app.inject({ method: 'POST', url: '/api/openclaw/sync', headers: { Cookie: cookie } });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/diff',
+      headers: { Cookie: cookie },
+    });
+
+    const { diff } = res.json();
+    expect(diff.hasChanges).toBe(false);
+    expect(diff.agents.added).toHaveLength(0);
+    expect(diff.agents.removed).toHaveLength(0);
+    expect(diff.agents.modified).toHaveLength(0);
+    expect(diff.agents.unchanged.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('detects agent modifications after sync', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { leadId } = await seedAgents(orgId, cookie);
+
+    // 최초 sync
+    await app.inject({ method: 'POST', url: '/api/openclaw/sync', headers: { Cookie: cookie } });
+
+    // 에이전트 모델 변경
+    await getPool().query(
+      'UPDATE agents SET model = $1 WHERE id = $2',
+      ['claude-opus-4-6', leadId],
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/diff',
+      headers: { Cookie: cookie },
+    });
+
+    const { diff } = res.json();
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.agents.modified.length).toBeGreaterThanOrEqual(1);
+    // 모델 변경이 감지됨
+    const modelChange = diff.agents.modified.find(
+      (m: { agentId: string; changes: Array<{ field: string }> }) =>
+        m.changes.some((c: { field: string }) => c.field === 'model'),
+    );
+    expect(modelChange).toBeDefined();
+  });
+
+  it('detects added agents after sync', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    const { wsId, teamId } = await seedAgents(orgId, cookie);
+
+    await app.inject({ method: 'POST', url: '/api/openclaw/sync', headers: { Cookie: cookie } });
+
+    // 새 에이전트 추가
+    await getPool().query(
+      `INSERT INTO agents(id,org_id,workspace_id,team_id,org_level,is_lead,name,soul,command_name,harness_pattern,model)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [newId(), orgId, wsId, teamId, 'worker', false, 'QA엔지니어', '테스트 담당', 'qa', 'single', 'claude-sonnet-4-6'],
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/openclaw/diff',
+      headers: { Cookie: cookie },
+    });
+
+    const { diff } = res.json();
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.agents.added.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── POST /api/openclaw/selective-sync ────────────────────────────────
+
+describe('POST /api/openclaw/selective-sync', () => {
+  it('returns diff alongside sync result', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    await seedAgents(orgId, cookie);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/selective-sync',
+      headers: { Cookie: cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.diff).toBeDefined();
+    expect(body.diff.hasChanges).toBe(true);
+    expect(body.agentCount).toBe(3);
+    expect(body.config).toBeDefined();
+  });
+
+  it('no-op selective-sync when nothing changed', async () => {
+    const { cookie, orgId } = await seedUser({ role: 'org_admin' });
+    await seedAgents(orgId, cookie);
+
+    // 최초 full sync
+    await app.inject({ method: 'POST', url: '/api/openclaw/sync', headers: { Cookie: cookie } });
+
+    // selective sync — 변경 없음
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/selective-sync',
+      headers: { Cookie: cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.diff.hasChanges).toBe(false);
+  });
+
+  it('member cannot selective-sync (403)', async () => {
+    const { cookie } = await seedUser({ role: 'member' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/openclaw/selective-sync',
+      headers: { Cookie: cookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});

@@ -153,10 +153,38 @@ app.prepare().then(() => {
 
   io.on('connection', (socket) => {
     console.log('🔌 Client connected:', socket.id);
+
+    // Gateway 로그 스트리밍 구독
+    socket.on('gateway:subscribe', () => {
+      socket.join('gateway:logs');
+      // 기존 버퍼(히스토리) 전송
+      import('./src/lib/gateway-manager.js').then(({ getLogBuffer }) => {
+        socket.emit('gateway:history', getLogBuffer());
+      }).catch(() => {});
+    });
+
+    socket.on('gateway:unsubscribe', () => {
+      socket.leave('gateway:logs');
+    });
+
     socket.on('disconnect', () => console.log('🔌 Client disconnected:', socket.id));
   });
 
+  // Gateway 로그 EventEmitter → Socket.IO 브릿지
+  import('./src/lib/gateway-manager.js').then(({ gatewayLogs }) => {
+    gatewayLogs.on('log', (entry: unknown) => {
+      io.to('gateway:logs').emit('gateway:log', entry);
+    });
+  }).catch(() => {});
+
   httpServer.listen(port, '0.0.0.0', () => {
     console.log(`\n🔨 AI 사업부 허브\n   ➜ http://localhost:${port}/\n`);
+
+    // Gateway 자동 시작 (설정에 따라)
+    import('./src/lib/gateway-manager.js').then(({ initGatewayAutoStart }) => {
+      initGatewayAutoStart().catch(err =>
+        console.warn('[Gateway AutoStart] 초기화 실패:', err.message)
+      );
+    }).catch(() => { /* gateway-manager import 실패 시 무시 */ });
   });
 });

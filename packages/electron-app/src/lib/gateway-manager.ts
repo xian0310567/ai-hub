@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { isGatewayAvailable } from './openclaw-client';
+import { readConfig } from './openclaw-config';
 
 // ── 상태 ──────────────────────────────────────────────────────────────
 
@@ -164,8 +165,14 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
       '--bind', GATEWAY_BIND,
       '--port', GATEWAY_PORT,
       '--force',
-      '--allow-unconfigured',
     ];
+
+    // openclaw.json이 있으면 --allow-unconfigured 생략
+    const config = readConfig();
+    if (!config) {
+      args.push('--allow-unconfigured');
+    }
+
     if (configDir) args.push('--config', configDir);
 
     // 프로세스 조기 종료 감지용
@@ -178,7 +185,7 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        // ANTHROPIC_API_KEY: 제거 — claude-cli 백엔드는 자체 인증 사용
         OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
         OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
         OPENCLAW_CONFIG_DIR: process.env.OPENCLAW_CONFIG_DIR,

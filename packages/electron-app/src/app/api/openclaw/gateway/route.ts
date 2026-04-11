@@ -8,16 +8,19 @@
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { getGatewayInfo, startGateway, stopGateway, getLogBuffer, clearLogBuffer } from '@/lib/gateway-manager';
+import { getSetupStatus } from '@/lib/openclaw-config';
 
 export async function GET(req: NextRequest) {
   const user = await getSession(req);
   if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   const info = await getGatewayInfo();
+  const setupStatus = getSetupStatus();
   const withLogs = new URL(req.url).searchParams.get('logs') === '1';
   return Response.json({
     ok: true,
     ...info,
+    cliBackendConfigured: setupStatus.isConfigured,
     ...(withLogs ? { logs: getLogBuffer() } : {}),
   });
 }

@@ -10,6 +10,7 @@ interface GatewayInfo {
   port: string;
   lastError: string | null;
   needsBuild: boolean;
+  cliBackendConfigured?: boolean;
 }
 
 interface DbStatus {
@@ -367,6 +368,30 @@ export default function OpenClawStatus() {
               <span style={{ ...S.toggleKnob, left: autoStart ? 18 : 2 }} />
             </button>
           </div>
+
+          {/* CLI 백엔드 설정 미완료 안내 */}
+          {gatewayInfo && gatewayInfo.cliBackendConfigured === false && (
+            <div style={{ padding: '0 16px 8px' }}>
+              <div style={{
+                padding: '10px 14px',
+                background: 'rgba(245, 158, 11, 0.08)',
+                border: '1px solid rgba(245, 158, 11, 0.2)',
+                borderRadius: 6,
+                fontSize: 11,
+                color: '#f59e0b',
+                lineHeight: 1.5,
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Claude CLI 백엔드 미설정</div>
+                <div>에이전트 실행을 위해 설정이 필요합니다.</div>
+                <a
+                  href="/settings?tab=openclaw"
+                  style={{ color: '#f59e0b', fontWeight: 600, textDecoration: 'underline', marginTop: 4, display: 'inline-block' }}
+                >
+                  설정 페이지로 이동
+                </a>
+              </div>
+            </div>
+          )}
 
           {/* Actions */}
           <div style={S.btnGroup}>

@@ -8,6 +8,7 @@ interface GatewayInfo {
   restartCount: number;
   available: boolean;
   port: string;
+  lastError: string | null;
 }
 
 interface DbStatus {
@@ -22,6 +23,19 @@ interface StatusData {
   ok: boolean;
   gateway: { available: boolean; url: string; ready?: boolean };
   db: DbStatus | null;
+}
+
+// ── 에러 메시지 한국어 매핑 ───────────────────────────────────────────
+const ERROR_MESSAGES: Record<string, string> = {
+  openclaw_not_found: 'openclaw CLI를 찾을 수 없습니다. 설치 후 다시 시도하세요.',
+  startup_timeout: '게이트웨이 시작 시간이 초과되었습니다 (10초).',
+  already_starting: '이미 시작 중입니다.',
+  process_error: '게이트웨이 프로세스 오류가 발생했습니다.',
+};
+
+function getErrorMessage(reason: string | null | undefined): string {
+  if (!reason) return '알 수 없는 오류';
+  return ERROR_MESSAGES[reason] ?? reason;
 }
 
 // ── Styles ────────────────────────────────────────────────────────────
@@ -102,6 +116,45 @@ const S: Record<string, React.CSSProperties> = {
     fontFamily: "'Inter', -apple-system, sans-serif",
     transition: 'opacity .15s',
   },
+  errorBox: {
+    margin: '0 16px',
+    padding: '8px 10px',
+    background: 'rgba(239, 68, 68, 0.08)',
+    border: '1px solid rgba(239, 68, 68, 0.2)',
+    borderRadius: 6,
+    fontSize: 11,
+    color: '#ef4444',
+    lineHeight: 1.4,
+  },
+  toggleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '10px 16px',
+    borderBottom: '1px solid var(--border-subtle)',
+    fontSize: 12,
+  },
+  toggle: {
+    position: 'relative' as const,
+    width: 36,
+    height: 20,
+    borderRadius: 10,
+    cursor: 'pointer',
+    transition: 'background .2s',
+    flexShrink: 0,
+    border: 'none',
+    padding: 0,
+  },
+  toggleKnob: {
+    position: 'absolute' as const,
+    top: 2,
+    width: 16,
+    height: 16,
+    borderRadius: '50%',
+    background: '#fff',
+    transition: 'left .2s',
+    boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+  },
 };
 
 const GATEWAY_STATUS: Record<string, { label: string; color: string }> = {
@@ -118,6 +171,8 @@ export default function OpenClawStatus() {
   const [gatewayInfo, setGatewayInfo] = useState<GatewayInfo | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
+  const [autoStart, setAutoStart] = useState(false);
+  const [autoStartLoading, setAutoStartLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -130,12 +185,24 @@ export default function OpenClawStatus() {
     if (gwResult.status === 'fulfilled' && gwResult.value) setGatewayInfo(gwResult.value);
   }, []);
 
+  // 자동 시작 설정 로드
+  const loadAutoStart = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings?key=gateway_auto_start');
+      if (res.ok) {
+        const data = await res.json();
+        setAutoStart(data.value === 'true');
+      }
+    } catch {}
+  }, []);
+
   // 초기 로드 + 폴링
   useEffect(() => {
     reload();
+    loadAutoStart();
     pollRef.current = setInterval(reload, 10_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [reload]);
+  }, [reload, loadAutoStart]);
 
   // 패널 외부 클릭 시 닫기
   useEffect(() => {
@@ -177,9 +244,25 @@ export default function OpenClawStatus() {
     setSyncLoading(false);
   };
 
+  const handleAutoStartToggle = async () => {
+    const newValue = !autoStart;
+    setAutoStartLoading(true);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'gateway_auto_start', value: newValue ? 'true' : 'false' }),
+      });
+      if (res.ok) setAutoStart(newValue);
+    } catch {}
+    setAutoStartLoading(false);
+  };
+
   const agentCount = status?.db?.totalAgents ?? 0;
   const synced = status?.db?.hasSyncedConfig ?? false;
   const configVer = status?.db?.configVersion ?? 0;
+  const lastError = gatewayInfo?.lastError;
+  const showError = effectiveState === 'error' && lastError;
 
   return (
     <div style={S.wrapper} ref={panelRef}>
@@ -203,6 +286,15 @@ export default function OpenClawStatus() {
             <span style={S.label}>Gateway</span>
             <span style={{ ...S.badge, background: `${gwColor}22`, color: gwColor }}>{gwLabel}</span>
           </div>
+
+          {/* 에러 상세 */}
+          {showError && (
+            <div style={{ padding: '0 0 8px' }}>
+              <div style={S.errorBox}>
+                {getErrorMessage(lastError)}
+              </div>
+            </div>
+          )}
 
           {gwAvailable && gatewayInfo && (
             <div style={{ ...S.row, fontSize: 11, color: 'var(--text-muted)' }}>
@@ -244,6 +336,24 @@ export default function OpenClawStatus() {
               </span>
             </div>
           )}
+
+          {/* Auto Start Toggle */}
+          <div style={S.toggleRow}>
+            <span style={S.label}>서버 시작 시 자동 실행</span>
+            <button
+              style={{
+                ...S.toggle,
+                background: autoStart ? 'var(--accent)' : 'var(--bg-canvas)',
+                border: autoStart ? 'none' : '1px solid var(--border)',
+                opacity: autoStartLoading ? 0.5 : 1,
+              }}
+              disabled={autoStartLoading}
+              onClick={handleAutoStartToggle}
+              aria-label="자동 시작 토글"
+            >
+              <span style={{ ...S.toggleKnob, left: autoStart ? 18 : 2 }} />
+            </button>
+          </div>
 
           {/* Actions */}
           <div style={S.btnGroup}>

@@ -14,6 +14,7 @@ import { isGatewayAvailable } from './openclaw-client';
 export type GatewayState = 'stopped' | 'starting' | 'running' | 'error';
 
 let _state: GatewayState = 'stopped';
+let _lastError: string | null = null;
 let _process: ChildProcess | null = null;
 let _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 let _restartCount = 0;
@@ -110,6 +111,7 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
   // 이미 실행 중인 Gateway 확인
   if (await isGatewayAvailable()) {
     _state = 'running';
+    _lastError = null;
     startHealthCheck();
     return { ok: true, reason: 'already_running' };
   }
@@ -117,6 +119,7 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
   const binary = findOpenClawBinary();
   if (!binary) {
     _state = 'error';
+    _lastError = 'openclaw_not_found';
     return { ok: false, reason: 'openclaw_not_found' };
   }
 
@@ -161,8 +164,9 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
       }
     });
 
-    _process.on('error', () => {
+    _process.on('error', (err) => {
       _state = 'error';
+      _lastError = err.message || 'process_error';
       _process = null;
     });
 
@@ -171,15 +175,18 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
     if (started) {
       _state = 'running';
       _restartCount = 0;
+      _lastError = null;
       startHealthCheck();
       return { ok: true };
     }
 
     _state = 'error';
+    _lastError = 'startup_timeout';
     return { ok: false, reason: 'startup_timeout' };
   } catch (err: unknown) {
     _state = 'error';
-    return { ok: false, reason: err instanceof Error ? err.message : 'unknown' };
+    _lastError = err instanceof Error ? err.message : 'unknown';
+    return { ok: false, reason: _lastError };
   }
 }
 
@@ -204,9 +211,13 @@ export async function getGatewayInfo(): Promise<{
   restartCount: number;
   available: boolean;
   port: string;
+  lastError: string | null;
 }> {
   const available = await isGatewayAvailable();
-  if (available && _state !== 'running') _state = 'running';
+  if (available && _state !== 'running') {
+    _state = 'running';
+    _lastError = null;
+  }
   if (!available && _state === 'running') _state = 'stopped';
 
   return {
@@ -215,6 +226,7 @@ export async function getGatewayInfo(): Promise<{
     restartCount: _restartCount,
     available,
     port: GATEWAY_PORT,
+    lastError: _lastError,
   };
 }
 

@@ -144,7 +144,8 @@ describe("spawnClaudeProcess", () => {
     process.env.CLAUDE_CLI_PATH = "/usr/local/bin/claude";
   });
 
-  it("includes -p, output-format, verbose, and bypassPermissions by default", () => {
+  it("includes -p, output-format, verbose by default and omits permission-mode", () => {
+    delete process.env.OPENCLAW_CLI_PERMISSION_MODE;
     spawnClaudeProcess({ prompt: "hello" });
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const [, args] = mockSpawn.mock.calls[0];
@@ -154,6 +155,22 @@ describe("spawnClaudeProcess", () => {
     expect(args).toContain("stream-json");
     expect(args).toContain("--include-partial-messages");
     expect(args).toContain("--verbose");
+    // permission-mode는 opt-in이며 기본 호출에서는 절대 추가되지 않아야 한다.
+    expect(args).not.toContain("--permission-mode");
+  });
+
+  it("adds --permission-mode when options.permissionMode is set", () => {
+    delete process.env.OPENCLAW_CLI_PERMISSION_MODE;
+    spawnClaudeProcess({ prompt: "p", options: { permissionMode: "acceptEdits" } });
+    const [, args] = mockSpawn.mock.calls[0];
+    expect(args).toContain("--permission-mode");
+    expect(args).toContain("acceptEdits");
+  });
+
+  it("uses OPENCLAW_CLI_PERMISSION_MODE env when option is omitted", () => {
+    process.env.OPENCLAW_CLI_PERMISSION_MODE = "bypassPermissions";
+    spawnClaudeProcess({ prompt: "p" });
+    const [, args] = mockSpawn.mock.calls[0];
     expect(args).toContain("--permission-mode");
     expect(args).toContain("bypassPermissions");
   });

@@ -22,6 +22,14 @@ export interface CliTransportOptions {
   timeoutMs?: number;
   /** AbortSignal. */
   signal?: AbortSignal;
+  /**
+   * `--permission-mode` 값. 미지정 시 플래그를 추가하지 않고 claude CLI의
+   * 기본 동작(default)을 따른다. `bypassPermissions`는 root/sudo 환경에서
+   * 즉시 거부되므로 명시 opt-in 항목이다.
+   *
+   * 환경변수 fallback: `OPENCLAW_CLI_PERMISSION_MODE`.
+   */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
 
 /** spawn 시 사용한 인자/환경 정보를 함께 반환한다. 테스트와 디버깅에서 활용. */
@@ -163,11 +171,11 @@ export function isCliBinaryAvailable(binaryPath?: string): boolean {
  *     --output-format stream-json
  *     --include-partial-messages
  *     --verbose
- *     --permission-mode bypassPermissions
  *     [--model {modelId}]
  *     [--allowedTools Tool1,Tool2]
  *     [--append-system-prompt {system}]
  *     [--resume {sessionId}] | [--session-id {sessionId}]
+ *     [--permission-mode {mode}]   // opt-in only
  */
 export function spawnClaudeProcess(params: {
   prompt: string;
@@ -212,7 +220,19 @@ export function spawnClaudeProcess(params: {
     args.push("--session-id", params.sessionId);
   }
 
-  args.push("--permission-mode", "bypassPermissions");
+  // permission-mode는 opt-in. root/sudo에서는 bypassPermissions이 거부되므로
+  // 기본값으로 어떤 플래그도 전달하지 않는다.
+  const permissionMode =
+    params.options?.permissionMode ??
+    (process.env.OPENCLAW_CLI_PERMISSION_MODE as
+      | "default"
+      | "acceptEdits"
+      | "plan"
+      | "bypassPermissions"
+      | undefined);
+  if (permissionMode) {
+    args.push("--permission-mode", permissionMode);
+  }
 
   const proc = spawn(binary, args, {
     cwd: params.options?.cwd || process.cwd(),

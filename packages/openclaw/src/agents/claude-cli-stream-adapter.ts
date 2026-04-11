@@ -2,55 +2,28 @@
  * Claude CLI의 `--output-format stream-json` JSONL 출력을 OpenClaw 내부
  * transport 이벤트로 변환하는 어댑터.
  *
- * CLI 출력 예시 (`--include-partial-messages` 활성):
- *   {"type":"system","subtype":"init","model":"claude-sonnet-4-6", ...}
- *   {"type":"assistant","message":{"content":[{"type":"text","text":"Hel"}]},"is_partial":true}
- *   {"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]},"is_partial":true}
- *   {"type":"result","message":{"content":[...],"stop_reason":"end_turn","usage":{...}}}
+ * 실제 claude CLI(2.1.x)는 Anthropic SDK의 SSE 이벤트를 그대로 감싼 JSONL을
+ * 출력한다. 핵심 형태는 다음과 같다:
  *
- * 변환 대상은 anthropic-transport-stream.ts와 동일한 transport 이벤트 셋이다:
- *   { type: "start", partial }
- *   { type: "text_start", contentIndex, partial }
- *   { type: "text_delta", contentIndex, delta, partial }
- *   { type: "text_end", contentIndex, content, partial }
- *   { type: "thinking_start" / "thinking_delta" / "thinking_end" }
- *   { type: "toolcall_start" / "toolcall_delta" / "toolcall_end" }
- *   { type: "done", reason, message }
- *   { type: "error", reason, error }
+ *   {"type":"system","subtype":"init", ...}                          // 무시
+ *   {"type":"stream_event","event":{"type":"message_start", ...}}
+ *   {"type":"stream_event","event":{"type":"content_block_start", ...}}
+ *   {"type":"stream_event","event":{"type":"content_block_delta", ...}}
+ *   {"type":"stream_event","event":{"type":"content_block_stop", ...}}
+ *   {"type":"assistant","message":{ ... full snapshot ... }}         // 무시
+ *   {"type":"stream_event","event":{"type":"message_delta", ...}}
+ *   {"type":"stream_event","event":{"type":"message_stop"}}
+ *   {"type":"rate_limit_event", ...}                                 // 무시
+ *   {"type":"system","subtype":"hook_started"|"hook_response", ...}  // 무시
+ *   {"type":"result","subtype":"success","result":"...","usage":{...}, ...}
+ *
+ * `stream_event.event.*`의 내부 페이로드는 anthropic-transport-stream.ts의
+ * SDK 분기와 동일한 구조라 그쪽 처리 로직을 거의 그대로 옮겨 쓴다.
+ * 최종 usage/stop_reason은 top-level `result` 이벤트에서도 보강한다.
  */
 
 import type { ChildProcess } from "node:child_process";
-
-export interface CliStreamContentBlock {
-  type: "text" | "tool_use" | "tool_result" | "thinking";
-  text?: string;
-  thinking?: string;
-  id?: string;
-  name?: string;
-  input?: unknown;
-}
-
-export interface CliStreamMessage {
-  id?: string;
-  content?: CliStreamContentBlock[];
-  model?: string;
-  stop_reason?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-  };
-}
-
-export interface CliStreamEvent {
-  type: "system" | "assistant" | "result" | "error" | "tool_use" | "tool_result";
-  subtype?: string;
-  message?: CliStreamMessage;
-  model?: string;
-  error?: string;
-  is_partial?: boolean;
-}
+import { parseStreamingJson } from "@mariozechner/pi-ai";
 
 export interface TransportEvent {
   type: string;
@@ -67,12 +40,15 @@ export interface TransportEvent {
 interface MutableTextBlock {
   type: "text";
   text: string;
+  index?: number;
 }
 
 interface MutableThinkingBlock {
   type: "thinking";
   thinking: string;
   thinkingSignature: string;
+  redacted?: boolean;
+  index?: number;
 }
 
 interface MutableToolBlock {
@@ -80,6 +56,8 @@ interface MutableToolBlock {
   id: string;
   name: string;
   arguments: unknown;
+  partialJson?: string;
+  index?: number;
 }
 
 type MutableBlock = MutableTextBlock | MutableThinkingBlock | MutableToolBlock;
@@ -139,9 +117,14 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
+function recomputeTotal(output: MutableAssistantOutput): void {
+  output.usage.totalTokens =
+    output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+}
+
 /**
- * 문자열로부터 JSONL 라인들을 비동기적으로 추출하는 헬퍼.
- * stdout 청크는 라인 경계에 정렬되어 있지 않을 수 있으므로 버퍼링한다.
+ * stdout 청크는 라인 경계에 정렬되어 있지 않으므로 버퍼링하면서
+ * 한 줄씩 흘려보낸다.
  */
 async function* iterStdoutLines(proc: ChildProcess): AsyncGenerator<string> {
   if (!proc.stdout) {
@@ -182,7 +165,7 @@ async function* iterStdoutLines(proc: ChildProcess): AsyncGenerator<string> {
     wake();
   });
 
-  proc.on("error", (err) => {
+  proc.on("error", (err: unknown) => {
     errored = err instanceof Error ? err : new Error(String(err));
     done = true;
     wake();
@@ -208,219 +191,343 @@ async function* iterStdoutLines(proc: ChildProcess): AsyncGenerator<string> {
   }
 }
 
+interface CliJsonl {
+  type?: string;
+  subtype?: string;
+  event?: { type?: string; [k: string]: unknown };
+  message?: { id?: string; usage?: Record<string, unknown> };
+  result?: string;
+  stop_reason?: string;
+  usage?: Record<string, unknown>;
+  error?: string;
+  [k: string]: unknown;
+}
+
 /**
- * ChildProcess의 JSONL stdout을 파싱하여 transport 이벤트 제너레이터를 만든다.
+ * ChildProcess의 JSONL stdout을 파싱해 transport 이벤트 제너레이터를 만든다.
  *
  * @param proc spawn된 claude CLI 프로세스
- * @param meta provider/model — start/done 이벤트의 partial 출력에 채워 넣음
+ * @param meta provider/model — start/done 이벤트의 partial 출력에 기록.
  */
 export async function* parseCliStream(
   proc: ChildProcess,
   meta: { provider: string; model: string },
 ): AsyncGenerator<TransportEvent> {
   const output = createEmptyOutput(meta.provider, meta.model);
+  const blocks = output.content;
   let startEmitted = false;
+  let doneEmitted = false;
 
-  // 텍스트/사고 블록의 마지막 길이를 기록해 델타만 추출한다.
-  // partial 메시지는 누적 텍스트를 다시 보내므로 새로 추가된 부분만 emit해야 한다.
-  const textLengths = new Map<number, number>();
-  const thinkingLengths = new Map<number, number>();
-  // tool_use 블록은 한 번만 start를 emit하기 위해 추적.
-  const toolStarted = new Set<number>();
-
-  const ensureStart = () => {
-    if (!startEmitted) {
-      startEmitted = true;
-      return { type: "start", partial: output as unknown } satisfies TransportEvent;
-    }
-    return null;
+  const ensureStart = (): TransportEvent | null => {
+    if (startEmitted) return null;
+    startEmitted = true;
+    return { type: "start", partial: output as unknown };
   };
+
+  // 내부 SSE 이벤트(stream_event.event) 처리.
+  // anthropic-transport-stream.ts의 SDK 분기와 동일한 분기 트리.
+  function* handleSseEvent(event: Record<string, unknown>): Generator<TransportEvent> {
+    const evType = typeof event.type === "string" ? event.type : "";
+
+    if (evType === "message_start") {
+      const message = event.message as
+        | { id?: string; usage?: Record<string, unknown> }
+        | undefined;
+      const usage = message?.usage ?? {};
+      if (typeof message?.id === "string") output.responseId = message.id;
+      if (typeof usage.input_tokens === "number") output.usage.input = usage.input_tokens;
+      if (typeof usage.output_tokens === "number") output.usage.output = usage.output_tokens;
+      if (typeof usage.cache_read_input_tokens === "number") {
+        output.usage.cacheRead = usage.cache_read_input_tokens;
+      }
+      if (typeof usage.cache_creation_input_tokens === "number") {
+        output.usage.cacheWrite = usage.cache_creation_input_tokens;
+      }
+      recomputeTotal(output);
+      return;
+    }
+
+    if (evType === "content_block_start") {
+      const contentBlock = event.content_block as Record<string, unknown> | undefined;
+      const index = typeof event.index === "number" ? event.index : -1;
+      if (contentBlock?.type === "text") {
+        const block: MutableTextBlock = { type: "text", text: "", index };
+        blocks.push(block);
+        yield {
+          type: "text_start",
+          contentIndex: blocks.length - 1,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (contentBlock?.type === "thinking") {
+        const block: MutableThinkingBlock = {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: "",
+          index,
+        };
+        blocks.push(block);
+        yield {
+          type: "thinking_start",
+          contentIndex: blocks.length - 1,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (contentBlock?.type === "redacted_thinking") {
+        const block: MutableThinkingBlock = {
+          type: "thinking",
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: typeof contentBlock.data === "string" ? contentBlock.data : "",
+          redacted: true,
+          index,
+        };
+        blocks.push(block);
+        yield {
+          type: "thinking_start",
+          contentIndex: blocks.length - 1,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (contentBlock?.type === "tool_use") {
+        const block: MutableToolBlock = {
+          type: "toolCall",
+          id: typeof contentBlock.id === "string" ? contentBlock.id : "",
+          name: typeof contentBlock.name === "string" ? contentBlock.name : "",
+          arguments:
+            contentBlock.input && typeof contentBlock.input === "object"
+              ? (contentBlock.input as Record<string, unknown>)
+              : {},
+          partialJson: "",
+          index,
+        };
+        blocks.push(block);
+        yield {
+          type: "toolcall_start",
+          contentIndex: blocks.length - 1,
+          partial: output as unknown,
+        };
+      }
+      return;
+    }
+
+    if (evType === "content_block_delta") {
+      const idx = blocks.findIndex((b) => b.index === event.index);
+      if (idx < 0) return;
+      const block = blocks[idx];
+      const delta = event.delta as Record<string, unknown> | undefined;
+
+      if (
+        block.type === "text" &&
+        delta?.type === "text_delta" &&
+        typeof delta.text === "string"
+      ) {
+        block.text += delta.text;
+        yield {
+          type: "text_delta",
+          contentIndex: idx,
+          delta: delta.text,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (
+        block.type === "thinking" &&
+        delta?.type === "thinking_delta" &&
+        typeof delta.thinking === "string"
+      ) {
+        block.thinking += delta.thinking;
+        yield {
+          type: "thinking_delta",
+          contentIndex: idx,
+          delta: delta.thinking,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (
+        block.type === "toolCall" &&
+        delta?.type === "input_json_delta" &&
+        typeof delta.partial_json === "string"
+      ) {
+        block.partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
+        block.arguments = parseStreamingJson(block.partialJson);
+        yield {
+          type: "toolcall_delta",
+          contentIndex: idx,
+          delta: delta.partial_json,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (
+        block.type === "thinking" &&
+        delta?.type === "signature_delta" &&
+        typeof delta.signature === "string"
+      ) {
+        block.thinkingSignature = `${String(block.thinkingSignature ?? "")}${delta.signature}`;
+      }
+      return;
+    }
+
+    if (evType === "content_block_stop") {
+      const idx = blocks.findIndex((b) => b.index === event.index);
+      if (idx < 0) return;
+      const block = blocks[idx];
+      delete block.index;
+      if (block.type === "text") {
+        yield {
+          type: "text_end",
+          contentIndex: idx,
+          content: block.text,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (block.type === "thinking") {
+        yield {
+          type: "thinking_end",
+          contentIndex: idx,
+          content: block.thinking,
+          partial: output as unknown,
+        };
+        return;
+      }
+      if (block.type === "toolCall") {
+        if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
+          block.arguments = parseStreamingJson(block.partialJson);
+        }
+        delete block.partialJson;
+        yield {
+          type: "toolcall_end",
+          contentIndex: idx,
+          toolCall: block as unknown,
+          partial: output as unknown,
+        };
+      }
+      return;
+    }
+
+    if (evType === "message_delta") {
+      const delta = event.delta as { stop_reason?: string } | undefined;
+      const usage = event.usage as Record<string, unknown> | undefined;
+      if (delta?.stop_reason) {
+        output.stopReason = mapStopReason(delta.stop_reason);
+      }
+      if (typeof usage?.input_tokens === "number") output.usage.input = usage.input_tokens;
+      if (typeof usage?.output_tokens === "number") output.usage.output = usage.output_tokens;
+      if (typeof usage?.cache_read_input_tokens === "number") {
+        output.usage.cacheRead = usage.cache_read_input_tokens;
+      }
+      if (typeof usage?.cache_creation_input_tokens === "number") {
+        output.usage.cacheWrite = usage.cache_creation_input_tokens;
+      }
+      recomputeTotal(output);
+      return;
+    }
+
+    // message_stop, ping 등은 별도 이벤트가 필요 없다.
+  }
 
   try {
     for await (const line of iterStdoutLines(proc)) {
-      let event: CliStreamEvent | null = null;
+      let parsed: CliJsonl | null = null;
       try {
-        event = JSON.parse(line) as CliStreamEvent;
+        parsed = JSON.parse(line) as CliJsonl;
       } catch {
         // 비JSON 줄(진행률 표시 등)은 무시.
         continue;
       }
-      if (!event) continue;
+      if (!parsed || typeof parsed !== "object") continue;
+      const topType = parsed.type;
 
-      // system init 이벤트에서 model을 미리 알 수 있으면 갱신.
-      if (event.type === "system") {
-        const sysModel =
-          event.model ||
-          (event as { message?: { model?: string } }).message?.model;
-        if (sysModel) output.model = sysModel;
+      // system init/hook_*: 모델 정보만 슬쩍 갱신하고 패스.
+      if (topType === "system") {
+        const sysModel = (parsed as { model?: string }).model;
+        if (typeof sysModel === "string" && sysModel.length > 0) {
+          output.model = sysModel;
+        }
         continue;
       }
 
-      if (event.type === "error") {
+      if (topType === "rate_limit_event" || topType === "assistant") {
+        // assistant는 중간 스냅샷 — stream_event 시퀀스로 충분하므로 무시.
+        continue;
+      }
+
+      if (topType === "error") {
         const startEv = ensureStart();
         if (startEv) yield startEv;
-        const message = event.error || "claude CLI 실행 오류";
+        const message =
+          typeof parsed.error === "string" ? parsed.error : "claude CLI 실행 오류";
         output.stopReason = "error";
         output.errorMessage = message;
+        doneEmitted = true;
         yield { type: "error", reason: "error", error: { ...output } as unknown };
         return;
       }
 
-      if (event.type === "assistant" && event.message) {
+      if (topType === "stream_event" && parsed.event && typeof parsed.event === "object") {
         const startEv = ensureStart();
         if (startEv) yield startEv;
-
-        if (event.message.model) output.model = event.message.model;
-        if (event.message.id) output.responseId = event.message.id;
-
-        const blocks = event.message.content ?? [];
-        for (let i = 0; i < blocks.length; i += 1) {
-          const block = blocks[i];
-
-          if (block.type === "text" && typeof block.text === "string") {
-            // 누적 텍스트 — 새로 늘어난 부분만 델타로 emit.
-            const prevLen = textLengths.get(i) ?? 0;
-            if (prevLen === 0 && block.text.length === 0) {
-              // 아직 비어있음 — 시작도 미루기.
-              continue;
-            }
-            // 기존 블록이 없으면 push.
-            while (output.content.length <= i) {
-              output.content.push({ type: "text", text: "" });
-            }
-            // 현재 인덱스의 슬롯 타입이 text가 아니라면(이전이 다른 타입이었을 수 있음) 보정.
-            const slot = output.content[i];
-            if (slot.type !== "text") {
-              continue;
-            }
-            if (prevLen === 0) {
-              yield {
-                type: "text_start",
-                contentIndex: i,
-                partial: output as unknown,
-              };
-            }
-            const newText = block.text.slice(prevLen);
-            if (newText.length > 0) {
-              slot.text = block.text;
-              textLengths.set(i, block.text.length);
-              yield {
-                type: "text_delta",
-                contentIndex: i,
-                delta: newText,
-                partial: output as unknown,
-              };
-            }
-            continue;
-          }
-
-          if (block.type === "thinking" && typeof block.thinking === "string") {
-            const prevLen = thinkingLengths.get(i) ?? 0;
-            if (prevLen === 0 && block.thinking.length === 0) {
-              continue;
-            }
-            while (output.content.length <= i) {
-              output.content.push({ type: "text", text: "" });
-            }
-            // 처음이면 thinking 블록으로 교체.
-            if (prevLen === 0) {
-              output.content[i] = {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: "",
-              };
-              yield {
-                type: "thinking_start",
-                contentIndex: i,
-                partial: output as unknown,
-              };
-            }
-            const slot = output.content[i];
-            if (slot.type !== "thinking") continue;
-            const newThinking = block.thinking.slice(prevLen);
-            if (newThinking.length > 0) {
-              slot.thinking = block.thinking;
-              thinkingLengths.set(i, block.thinking.length);
-              yield {
-                type: "thinking_delta",
-                contentIndex: i,
-                delta: newThinking,
-                partial: output as unknown,
-              };
-            }
-            continue;
-          }
-
-          if (block.type === "tool_use" && block.name) {
-            if (toolStarted.has(i)) {
-              continue;
-            }
-            toolStarted.add(i);
-            while (output.content.length <= i) {
-              output.content.push({ type: "text", text: "" });
-            }
-            const toolBlock: MutableToolBlock = {
-              type: "toolCall",
-              id: block.id ?? "",
-              name: block.name,
-              arguments: (block.input && typeof block.input === "object") ? block.input : {},
-            };
-            output.content[i] = toolBlock;
-            yield {
-              type: "toolcall_start",
-              contentIndex: i,
-              partial: output as unknown,
-            };
-          }
+        for (const ev of handleSseEvent(parsed.event)) {
+          yield ev;
         }
         continue;
       }
 
-      if (event.type === "result" && event.message) {
+      if (topType === "result") {
         const startEv = ensureStart();
         if (startEv) yield startEv;
 
-        // 마지막 누적 텍스트/사고/툴을 끝낸다.
-        for (let i = 0; i < output.content.length; i += 1) {
-          const slot = output.content[i];
-          if (slot.type === "text") {
-            yield {
-              type: "text_end",
-              contentIndex: i,
-              content: slot.text,
-              partial: output as unknown,
-            };
-          } else if (slot.type === "thinking") {
-            yield {
-              type: "thinking_end",
-              contentIndex: i,
-              content: slot.thinking,
-              partial: output as unknown,
-            };
-          } else if (slot.type === "toolCall") {
-            yield {
-              type: "toolcall_end",
-              contentIndex: i,
-              toolCall: slot as unknown,
-              partial: output as unknown,
-            };
+        // 일부 stream_event가 누락된 경우(예: 매우 짧은 응답)를 대비해
+        // result.result 텍스트에서도 텍스트 블록을 보강한다.
+        if (
+          blocks.length === 0 &&
+          typeof parsed.result === "string" &&
+          parsed.result.length > 0
+        ) {
+          const block: MutableTextBlock = { type: "text", text: parsed.result };
+          blocks.push(block);
+          yield { type: "text_start", contentIndex: 0, partial: output as unknown };
+          yield {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: parsed.result,
+            partial: output as unknown,
+          };
+          yield {
+            type: "text_end",
+            contentIndex: 0,
+            content: parsed.result,
+            partial: output as unknown,
+          };
+        }
+
+        // top-level usage가 더 정확한 최종값이므로 덮어쓴다.
+        const usage = parsed.usage;
+        if (usage && typeof usage === "object") {
+          if (typeof usage.input_tokens === "number") output.usage.input = usage.input_tokens;
+          if (typeof usage.output_tokens === "number") output.usage.output = usage.output_tokens;
+          if (typeof usage.cache_read_input_tokens === "number") {
+            output.usage.cacheRead = usage.cache_read_input_tokens;
           }
+          if (typeof usage.cache_creation_input_tokens === "number") {
+            output.usage.cacheWrite = usage.cache_creation_input_tokens;
+          }
+          recomputeTotal(output);
+        }
+        if (typeof parsed.stop_reason === "string") {
+          output.stopReason = mapStopReason(parsed.stop_reason);
+        }
+        if (parsed.subtype === "error_during_execution" || parsed.is_error === true) {
+          output.stopReason = "error";
+          if (typeof parsed.error === "string") output.errorMessage = parsed.error;
         }
 
-        const usage = event.message.usage;
-        if (usage) {
-          output.usage.input = usage.input_tokens ?? 0;
-          output.usage.output = usage.output_tokens ?? 0;
-          output.usage.cacheRead = usage.cache_read_input_tokens ?? 0;
-          output.usage.cacheWrite = usage.cache_creation_input_tokens ?? 0;
-          output.usage.totalTokens =
-            output.usage.input +
-            output.usage.output +
-            output.usage.cacheRead +
-            output.usage.cacheWrite;
-        }
-        output.stopReason = mapStopReason(event.message.stop_reason);
-
+        doneEmitted = true;
         yield {
           type: "done",
           reason: output.stopReason,
@@ -430,17 +537,21 @@ export async function* parseCliStream(
       }
     }
 
-    // stdout이 result 없이 끝난 경우 — 정상 종료로 간주하고 done emit.
-    const startEv = ensureStart();
-    if (startEv) yield startEv;
-    yield {
-      type: "done",
-      reason: output.stopReason,
-      message: { ...output } as unknown,
-    };
+    // result 없이 stdout이 닫힌 경우 — 정상 종료로 간주하고 done emit.
+    if (!doneEmitted) {
+      const startEv = ensureStart();
+      if (startEv) yield startEv;
+      yield {
+        type: "done",
+        reason: output.stopReason,
+        message: { ...output } as unknown,
+      };
+    }
   } catch (err) {
-    output.stopReason = "error";
-    output.errorMessage = err instanceof Error ? err.message : String(err);
-    yield { type: "error", reason: "error", error: { ...output } as unknown };
+    if (!doneEmitted) {
+      output.stopReason = "error";
+      output.errorMessage = err instanceof Error ? err.message : String(err);
+      yield { type: "error", reason: "error", error: { ...output } as unknown };
+    }
   }
 }

@@ -43,10 +43,12 @@ export interface OpenClawStreamChunk {
 
 export async function isGatewayAvailable(): Promise<boolean> {
   try {
-    const res = await fetch(`${GATEWAY_URL}/health`, {
+    // 어떤 HTTP 응답이든 (500 포함) 게이트웨이가 실행 중이라는 의미
+    // 연결 자체가 실패할 때만 false 반환
+    await fetch(`${GATEWAY_URL}/health`, {
       signal: AbortSignal.timeout(3000),
     });
-    return res.ok;
+    return true;
   } catch {
     return false;
   }

@@ -97,7 +97,7 @@ describe("configureChannelAccessWithAllowlist", () => {
     const setPolicy = vi.fn(
       (next: OpenClawConfig, policy: ChannelAccessPolicy): OpenClawConfig => ({
         ...next,
-        channels: { twitch: { groupPolicy: policy } },
+        channels: { discord: { groupPolicy: policy } },
       }),
     );
     const resolveAllowlist = vi.fn(async () => ["ignored"]);
@@ -106,7 +106,7 @@ describe("configureChannelAccessWithAllowlist", () => {
     const next = await configureChannelAccessWithAllowlist({
       cfg,
       prompter: prompter as any,
-      label: "Twitch chat",
+      label: "Discord chat",
       currentPolicy: "disabled",
       currentEntries: [],
       placeholder: "",
@@ -117,7 +117,7 @@ describe("configureChannelAccessWithAllowlist", () => {
       applyAllowlist,
     });
 
-    expect(next.channels).toEqual({ twitch: { groupPolicy: "allowlist" } });
+    expect(next.channels).toEqual({ discord: { groupPolicy: "allowlist" } });
     expect(resolveAllowlist).not.toHaveBeenCalled();
     expect(applyAllowlist).not.toHaveBeenCalled();
   });

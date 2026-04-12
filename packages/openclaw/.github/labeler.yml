@@ -95,11 +95,6 @@
       - any-glob-to-any-file:
           - "extensions/tlon/**"
           - "docs/channels/tlon.md"
-"channel: twitch":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/twitch/**"
-          - "docs/channels/twitch.md"
 "channel: voice-call":
   - changed-files:
       - any-glob-to-any-file:

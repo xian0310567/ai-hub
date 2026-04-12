@@ -44,16 +44,16 @@ describe('isGatewayAvailable', () => {
     expect(result).toBe(false);
   });
 
-  it('returns false when gateway returns non-ok', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false });
+  it('returns true when gateway returns non-ok (server is reachable)', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
     const result = await isGatewayAvailable();
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 
-  it('returns false when gateway returns 500 (plugin error)', async () => {
+  it('returns true when gateway returns 500 (server is running despite plugin error)', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
     const result = await isGatewayAvailable();
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 });
 

@@ -152,14 +152,6 @@
     "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
-    "file": "extensions/twitch/runtime-api.ts",
-    "line": 4,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/twitch.js",
-    "resolvedPath": "src/plugin-sdk/twitch.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/voice-call/runtime-api.ts",
     "line": 4,
     "kind": "export",

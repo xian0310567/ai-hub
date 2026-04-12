@@ -131,6 +131,7 @@ try { db.exec("ALTER TABLE mission_jobs ADD COLUMN gate_status TEXT NOT NULL DEF
 try { db.exec("ALTER TABLE mission_jobs ADD COLUMN quality_scores TEXT"); } catch {}
 try { db.exec("ALTER TABLE chat_logs ADD COLUMN session_key TEXT"); } catch {}
 try { db.exec("ALTER TABLE mission_schedules ADD COLUMN openclaw_cron_id TEXT"); } catch {}
+try { db.exec("ALTER TABLE missions ADD COLUMN error TEXT NOT NULL DEFAULT ''"); } catch {}
 
 // 마이그레이션 후 session_key 인덱스 생성 (기존 DB에 session_key가 없을 때 db.exec 안에서 실패하는 것 방지)
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_chat_logs_user_session ON chat_logs(user_id, agent_id, session_key)"); } catch {}
@@ -356,6 +357,7 @@ export interface Notification {
 export interface Mission {
   id: string; user_id: string; task: string; status: string;
   routing: string; steps: string; final_doc: string; images?: string;
+  error?: string;
   parent_mission_id?: string; origin: string;
   created_at?: number; updated_at?: number;
 }

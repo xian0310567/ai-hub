@@ -23,7 +23,7 @@ let _healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 let _restartCount = 0;
 const MAX_RESTARTS = 5;
 const HEALTH_CHECK_INTERVAL_MS = 15_000;
-const STARTUP_TIMEOUT_MS = 30_000;
+const STARTUP_TIMEOUT_MS = 90_000;
 
 // ── 로그 스트리밍 ──────────────────────────────────────────────���─────
 
@@ -183,14 +183,9 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
       env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
+        ...process.env,
         // ANTHROPIC_API_KEY: 제거 — claude-cli 백엔드는 자체 인증 사용
-        OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
-        OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN,
-        OPENCLAW_CONFIG_DIR: process.env.OPENCLAW_CONFIG_DIR,
-        DATA_DIR: process.env.DATA_DIR,
-        NODE_ENV: process.env.NODE_ENV,
+        ANTHROPIC_API_KEY: '',
       },
     });
 

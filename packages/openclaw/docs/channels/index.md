@@ -31,7 +31,6 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (bundled plugin).
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.
 - [Tlon](/channels/tlon) — Urbit-based messenger (bundled plugin).
-- [Twitch](/channels/twitch) — Twitch chat via IRC connection (bundled plugin).
 - [Voice Call](/plugins/voice-call) — Telephony via Plivo or Twilio (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 - [WeChat](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin) — Tencent iLink Bot plugin via QR login; private chats only.

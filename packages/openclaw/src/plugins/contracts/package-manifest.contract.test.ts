@@ -46,7 +46,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     mirroredRootRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
   },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",

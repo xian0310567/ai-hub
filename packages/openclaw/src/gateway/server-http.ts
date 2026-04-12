@@ -803,6 +803,28 @@ export function createGatewayHttpServer(opts: {
       return;
     }
 
+    // Handle liveness probes early, before plugin loading or config processing,
+    // so /health always responds even when plugins fail to load.
+    {
+      const probePath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const probeKind = GATEWAY_PROBE_STATUS_BY_PATH.get(probePath);
+      if (probeKind === "live") {
+        const method = (req.method ?? "GET").toUpperCase();
+        if (method !== "GET" && method !== "HEAD") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET, HEAD");
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Method Not Allowed");
+          return;
+        }
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.statusCode = 200;
+        res.end(method === "HEAD" ? undefined : JSON.stringify({ ok: true, status: "live" }));
+        return;
+      }
+    }
+
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];

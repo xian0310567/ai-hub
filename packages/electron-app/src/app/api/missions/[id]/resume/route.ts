@@ -392,8 +392,9 @@ ${resultBlock}
         Missions.update(id, { status: 'done', final_doc: finalDoc, steps: JSON.stringify(steps) });
         send({ type: 'done', final_doc: finalDoc });
       } catch (e: unknown) {
-        Missions.update(id, { status: 'failed', steps: JSON.stringify(steps) });
-        send({ type: 'error', error: `통합 문서 생성 실패: ${e instanceof Error ? e.message : String(e)}` });
+        const errMsg = e instanceof Error ? e.message : String(e);
+        Missions.update(id, { status: 'failed', error: `통합 문서 생성 실패: ${errMsg}`, steps: JSON.stringify(steps) });
+        send({ type: 'error', error: `통합 문서 생성 실패: ${errMsg}` });
       } finally {
         if (mcpConfigPath) { try { fs.unlinkSync(mcpConfigPath); } catch {} }
       }

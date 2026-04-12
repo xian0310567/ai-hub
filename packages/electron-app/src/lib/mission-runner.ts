@@ -332,7 +332,8 @@ ${resultBlock}
     const finalDoc = await callClaude(prompt, process.cwd());
     Missions.update(missionId, { status: 'done', final_doc: finalDoc, steps: JSON.stringify(steps) });
   } catch (e: unknown) {
-    Missions.update(missionId, { status: 'failed', steps: JSON.stringify(steps) });
+    const errMsg = e instanceof Error ? e.message : String(e);
+    Missions.update(missionId, { status: 'failed', error: `통합 문서 생성 실패: ${errMsg}`, steps: JSON.stringify(steps) });
     throw e;
   }
 }

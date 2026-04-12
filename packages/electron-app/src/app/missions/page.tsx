@@ -46,6 +46,7 @@ interface Mission {
   routing: Routing[];
   steps: Step[];
   final_doc: string;
+  error?: string;
   summary?: string;
   routingMeta?: {
     needs_clarification?: boolean;
@@ -368,7 +369,9 @@ export default function MissionsPage() {
           return;
         }
         if (m.status === 'failed') {
-          setErr('미션 실행 실패');
+          const stepErrors = (m.steps || []).filter((s: Step) => s.error).map((s: Step) => `[${s.org_name}] ${s.error}`);
+          const detail = m.error || stepErrors.join('; ') || '원인을 확인할 수 없습니다';
+          setErr(`미션 실행 실패: ${detail}`);
           setSteps(m.steps || []);
           reload();
           return;
@@ -550,6 +553,11 @@ export default function MissionsPage() {
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     {m.routing.length}개 조직 배정 · {new Date((m.created_at || 0) * 1000).toLocaleDateString('ko')}
                   </div>
+                  {(m.status === 'failed' || m.status === 'routing_failed') && m.error && (
+                    <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4, lineHeight: 1.5 }}>
+                      {m.error.length > 120 ? m.error.slice(0, 120) + '...' : m.error}
+                    </div>
+                  )}
                 </div>
                 <span style={{
                   fontSize: 10, fontWeight: 600, padding: '3px 10px', borderRadius: 12,

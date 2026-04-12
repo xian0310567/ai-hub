@@ -227,16 +227,29 @@ export default function OpenClawStatus() {
 
   const handleGatewayAction = async (action: 'start' | 'stop') => {
     setActionLoading(true);
-    try {
-      await fetch('/api/openclaw/gateway', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
-      // 잠시 후 상태 갱신
-      setTimeout(reload, 1500);
-    } catch {}
-    setActionLoading(false);
+    // 요청을 비동기로 보내고 폴링으로 상태 확인
+    fetch('/api/openclaw/gateway', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    }).then(r => r.ok ? r.json() : null).then(data => {
+      if (data && !data.ok) reload();
+    }).catch(() => {});
+    // 시작/정지 중 빠른 폴링 (3초 간격, 최대 90초)
+    let elapsed = 0;
+    const fastPoll = setInterval(async () => {
+      elapsed += 3000;
+      const gwRes = await fetch('/api/openclaw/gateway').then(r => r.ok ? r.json() : null).catch(() => null);
+      if (gwRes) setGatewayInfo(gwRes);
+      const done = action === 'start'
+        ? gwRes?.available || gwRes?.state === 'error'
+        : !gwRes?.available || gwRes?.state === 'stopped';
+      if (done || elapsed >= 90_000) {
+        clearInterval(fastPoll);
+        setActionLoading(false);
+        reload();
+      }
+    }, 3000);
   };
 
   const handleSync = async () => {

@@ -29,7 +29,6 @@
   "dist/extensions/slack/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/tlon/runtime-api.js",
-  "dist/extensions/twitch/runtime-api.js",
   "dist/extensions/voice-call/runtime-api.js",
   "dist/extensions/webhooks/runtime-api.js",
   "dist/extensions/whatsapp/light-runtime-api.js",

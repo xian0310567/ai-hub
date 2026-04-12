@@ -19,7 +19,9 @@ try {
   const cleanupDb = new Database(path.join(DATA_DIR, 'local.db'));
   cleanupDb.exec(`
     UPDATE missions
-       SET status = 'failed', updated_at = unixepoch()
+       SET status = 'failed',
+           error  = '서버 재시작으로 인해 중단됨',
+           updated_at = unixepoch()
      WHERE status IN ('running', 'analyzing');
 
     UPDATE mission_jobs

@@ -204,7 +204,7 @@ export async function POST(req: NextRequest) {
     setImmediate(() => {
       execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV },
         (err, stdout) => {
-          if (err) { Missions.update(id, { status: 'routing_failed', result: claudeSpawnError(err) }); return; }
+          if (err) { Missions.update(id, { status: 'routing_failed', error: claudeSpawnError(err) }); return; }
           try {
             // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
             let parsed: any;
@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
 
             const routing = parsed.routing || [];
             if (!Array.isArray(routing) || routing.length === 0) {
-              Missions.update(id, { status: 'routing_failed' }); return;
+              Missions.update(id, { status: 'routing_failed', error: '라우팅 분석 결과에 배정 가능한 에이전트가 없습니다' }); return;
             }
 
             for (const orgName of (parsed.new_org_needed || [])) {
@@ -256,7 +256,7 @@ export async function POST(req: NextRequest) {
                 });
               } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
             }
-          } catch { Missions.update(id, { status: 'routing_failed' }); }
+          } catch (parseErr) { Missions.update(id, { status: 'routing_failed', error: `라우팅 분석 결과 파싱 실패: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}` }); }
         }
       );
     });

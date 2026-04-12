@@ -117,6 +117,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     vmTaskIds.push(task?.id ?? '');
   }
 
+  // 초기 step 상태 — SSE 스트림 생성 전에 DB를 'running'으로 갱신하여
+  // 폴링과의 레이스 컨디션 방지 (폴링이 이전 상태를 읽는 문제)
+  const steps: Step[] = routing.map((r, i) => {
+    const queue = MissionJobs.queueForAgent(r.agent_id);
+    const pos = queue.findIndex(j => j.id === jobIds[i]);
+    return { org_name: r.org_name, agent_name: r.agent_name, status: pos > 0 ? 'waiting' : 'queued', queue_position: Math.max(0, pos) };
+  });
+  Missions.update(id, { status: 'running', steps: JSON.stringify(steps) });
+
   // SSE 스트리밍
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -125,12 +134,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch {}
       };
 
-      const steps: Step[] = routing.map((r, i) => {
-        const queue = MissionJobs.queueForAgent(r.agent_id);
-        const pos = queue.findIndex(j => j.id === jobIds[i]);
-        return { org_name: r.org_name, agent_name: r.agent_name, status: pos > 0 ? 'waiting' : 'queued', queue_position: Math.max(0, pos) };
-      });
-      Missions.update(id, { status: 'running', steps: JSON.stringify(steps) });
       send({ type: 'start', steps });
 
       // ── 1단계: pre_tasks (인프라 설정) ──

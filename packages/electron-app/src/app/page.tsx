@@ -391,6 +391,12 @@ export default function Dashboard() {
     startRunningPolling(missionId);
     try {
       const resp = await fetch(`/api/missions/${missionId}/run`, { method: 'POST' });
+      if (!resp.ok) {
+        stopRunningPolling(missionId);
+        const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        updateMission(missionId, { phase: 'error', err: errData.error || `실행 요청 실패 (${resp.status})` });
+        return;
+      }
       const reader = resp.body!.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -414,7 +420,7 @@ export default function Dashboard() {
               updateMission(missionId, { phase: 'done', doc: ev.final_doc });
             } else if (ev.type === 'error') {
               stopRunningPolling(missionId);
-              updateMission(missionId, { err: ev.error });
+              updateMission(missionId, { phase: 'error', err: ev.error });
             }
           } catch {}
         }

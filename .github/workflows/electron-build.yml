@@ -6,6 +6,7 @@ on:
     paths:
       - "packages/electron-app/**"
       - "packages/openclaw/**"
+      - ".github/workflows/electron-build.yml"
   workflow_dispatch:
 
 jobs:

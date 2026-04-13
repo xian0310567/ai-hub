@@ -2,7 +2,7 @@ name: Deploy vm-server to Fly.io
 
 on:
   push:
-    branches: [main]
+    branches: [staging, main]
     paths:
       - "packages/vm-server/**"
   workflow_dispatch:
@@ -11,13 +11,14 @@ on:
         description: "배포 환경"
         type: choice
         options:
-          - dev
+          - staging
           - prod
-        default: dev
+        default: staging
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +29,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "target=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "target=prod" >> "$GITHUB_OUTPUT"
           else
             echo "target=dev" >> "$GITHUB_OUTPUT"
           fi

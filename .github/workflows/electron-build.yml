@@ -2,7 +2,10 @@ name: Build Electron App
 
 on:
   push:
-    tags: ["v*"]
+    branches: [staging, main]
+    paths:
+      - "packages/electron-app/**"
+      - "packages/openclaw/**"
   workflow_dispatch:
 
 jobs:
@@ -51,11 +54,9 @@ jobs:
           cp packages/openclaw/package.json "$BUNDLE/"
           cp -r packages/openclaw/dist "$BUNDLE/dist"
 
-          # skills, assets 디렉토리가 있으면 복사
           [ -d packages/openclaw/skills ] && cp -r packages/openclaw/skills "$BUNDLE/skills"
           [ -d packages/openclaw/assets ] && cp -r packages/openclaw/assets "$BUNDLE/assets"
 
-          # 프로덕션 의존성만 설치 (native 모듈 포함)
           cd "$BUNDLE"
           npm install --omit=dev
 
@@ -67,13 +68,10 @@ jobs:
       - name: Build Electron (${{ matrix.platform }}-${{ matrix.arch }})
         working-directory: packages/electron-app
         env:
-          # macOS 코드 서명 (선택 — Secrets에 설정)
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          # Windows 코드 서명 (선택)
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          # 서명 키 없으면 서명 건너뛰기
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder build --${{ matrix.platform }} --${{ matrix.arch }}
 
@@ -89,14 +87,20 @@ jobs:
             packages/electron-app/dist/*.AppImage
           if-no-files-found: error
 
-  # ── GitHub Release 생성 (태그 푸시 시) ─────────────────────────────
+  # ── GitHub Release (main/prod 브랜치만) ────────────────────────────
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "version=$(node -p \"require('./packages/electron-app/package.json').version\")" >> "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -106,6 +110,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: AI Hub v${{ steps.version.outputs.version }}
           files: artifacts/**/*
           draft: true
           generate_release_notes: true

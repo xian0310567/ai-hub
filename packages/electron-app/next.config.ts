@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   ],
   outputFileTracingExcludes: {
     '/_global-error': ['**/*'],
+    '/**': [
+      '../openclaw/**',
+      '../../packages/openclaw/**',
+      'playwright.config.ts',
+      'tests/**',
+    ],
   },
   skipTrailingSlashRedirect: true,
   skipProxyUrlNormalize: true,

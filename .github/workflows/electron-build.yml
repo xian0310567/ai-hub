@@ -61,6 +61,11 @@ jobs:
           cd "$BUNDLE"
           npm install --omit=dev --ignore-scripts
 
+      # ── Preflight 체크 (타입 에러 조기 발견) ────────────────────────
+      - name: TypeCheck
+        working-directory: packages/electron-app
+        run: npx tsc --noEmit
+
       # ── Electron 빌드 ──────────────────────────────────────────────
       - name: Build Next.js
         working-directory: packages/electron-app

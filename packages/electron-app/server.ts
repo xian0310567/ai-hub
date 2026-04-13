@@ -17,8 +17,8 @@ const port     = parseInt(process.env.PORT || '3001', 10);
 try {
   const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
   const cleanupDb = new Database(path.join(DATA_DIR, 'local.db'));
-  cleanupDb.pragma('journal_mode = WAL');
   cleanupDb.pragma('busy_timeout = 5000');
+  cleanupDb.pragma('journal_mode = WAL');
   cleanupDb.exec(`
     UPDATE missions
        SET status = 'failed',
@@ -61,8 +61,8 @@ process.on('unhandledRejection', (reason) => {
 function startMissionScheduler() {
   const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), '.data');
   const schedDb = new Database(path.join(DATA_DIR, 'local.db'));
-  schedDb.pragma('journal_mode = WAL');
   schedDb.pragma('busy_timeout = 5000');
+  schedDb.pragma('journal_mode = WAL');
 
   const POLL_MS = 60_000; // 1분마다 체크
 

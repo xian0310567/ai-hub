@@ -13,16 +13,7 @@ const nextConfig: NextConfig = {
   },
   skipTrailingSlashRedirect: true,
   skipProxyUrlNormalize: true,
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      // keytar: 미설치 optional 네이티브 모듈 — 번들링에서 완전 제외
-      config.externals = [
-        ...(Array.isArray(config.externals) ? config.externals : config.externals ? [config.externals] : []),
-        'keytar',
-      ];
-    }
-    return config;
-  },
+  turbopack: {},
 };
 
 export default nextConfig;

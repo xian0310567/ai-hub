@@ -181,12 +181,6 @@ app.prepare().then(() => {
 
   httpServer.listen(port, '0.0.0.0', () => {
     console.log(`\n🔨 AI 사업부 허브\n   ➜ http://localhost:${port}/\n`);
-
-    // Gateway 자동 시작 (설정에 따라)
-    import('./src/lib/gateway-manager.js').then(({ initGatewayAutoStart }) => {
-      initGatewayAutoStart().catch(err =>
-        console.warn('[Gateway AutoStart] 초기화 실패:', err.message)
-      );
-    }).catch(() => { /* gateway-manager import 실패 시 무시 */ });
+    // Gateway 자동 시작은 instrumentation.ts register()에서 처리
   });
 });

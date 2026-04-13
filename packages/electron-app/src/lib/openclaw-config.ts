@@ -19,6 +19,12 @@ export interface OpenClawConfig {
     port: number;
     bind: 'loopback' | 'lan';
     auth: { mode: 'none' };
+    http?: {
+      endpoints?: {
+        chatCompletions?: { enabled: boolean };
+        responses?: { enabled: boolean };
+      };
+    };
   };
   agents: {
     defaults: {
@@ -68,6 +74,11 @@ export function buildDefaultConfig(model?: string, claudePath?: string): OpenCla
       port: parseInt(process.env.OPENCLAW_GATEWAY_PORT || '18789', 10),
       bind: 'loopback',
       auth: { mode: 'none' },
+      http: {
+        endpoints: {
+          chatCompletions: { enabled: true },
+        },
+      },
     },
     agents: {
       defaults: {

@@ -6,11 +6,19 @@ interface Schedule {
   id: string;
   name: string;
   cron_expr: string;
-  task: string;
-  enabled: number;
+  payload: string;
+  enabled: boolean;
   last_run_at?: number;
   next_run_at?: number;
   created_at?: number;
+  source?: 'vm' | 'local';
+}
+
+function parseTask(payload: string): string {
+  try {
+    const p = JSON.parse(payload);
+    return p.task || p.description || '';
+  } catch { return ''; }
 }
 
 const navLink: React.CSSProperties = {
@@ -49,7 +57,7 @@ export default function SchedulesPage() {
 
   const reload = useCallback(() => {
     fetch('/api/schedules').then(r => r.json()).then(d => {
-      if (d.ok) setSchedules(d.schedules);
+      if (Array.isArray(d)) setSchedules(d);
       else if (d.error === 'Unauthorized') router.replace('/login');
     });
   }, [router]);
@@ -59,25 +67,30 @@ export default function SchedulesPage() {
       .catch(() => router.replace('/login'));
   }, [reload, router]);
 
-  const toggleEnabled = async (id: string, current: number) => {
+  const toggleEnabled = async (id: string, current: boolean, source?: string) => {
     await fetch('/api/schedules', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, enabled: current === 0 }),
+      body: JSON.stringify({ id, enabled: !current, source }),
     });
     reload();
   };
 
-  const deleteSchedule = async (id: string, name: string) => {
+  const deleteSchedule = async (id: string, name: string, source?: string) => {
     if (!confirm(`"${name}" 스케줄을 삭제할까요?`)) return;
-    await fetch(`/api/schedules?id=${id}`, { method: 'DELETE' });
+    const params = new URLSearchParams({ id });
+    if (source) params.set('source', source);
+    await fetch(`/api/schedules?${params}`, { method: 'DELETE' });
     reload();
   };
+
+  const [editSource, setEditSource] = useState<string | undefined>();
 
   const startEdit = (s: Schedule) => {
     setEditId(s.id);
     setEditName(s.name);
     setEditCron(s.cron_expr);
+    setEditSource(s.source);
     setEditErr('');
   };
 
@@ -87,10 +100,10 @@ export default function SchedulesPage() {
     const r = await fetch('/api/schedules', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: editId, name: editName.trim() || undefined, cron_expr: editCron.trim() }),
+      body: JSON.stringify({ id: editId, name: editName.trim() || undefined, cron_expr: editCron.trim(), source: editSource }),
     });
     const d = await r.json();
-    if (d.ok) { setEditId(null); reload(); }
+    if (r.ok && !d.error) { setEditId(null); reload(); }
     else setEditErr(d.error || '저장 실패');
     setLoading(false);
   };
@@ -105,11 +118,11 @@ export default function SchedulesPage() {
         <a href="/org" style={navLink}>조직 관리</a>
       </nav>
 
-      <main style={{ maxWidth: 860, margin: '0 auto', padding: '32px 24px' }}>
+      <main style={{ maxWidth: 860, margin: '0 auto', padding: '86px 24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 28 }}>
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>🕐 반복 미션 스케줄</h1>
           <span style={{ fontSize: 12, color: 'var(--text-muted)', background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 12, padding: '2px 10px' }}>
-            {schedules.filter(s => s.enabled).length}개 활성
+            {schedules.filter(s => !!s.enabled).length}개 활성
           </span>
         </div>
 
@@ -160,7 +173,7 @@ export default function SchedulesPage() {
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
                     {/* 토글 */}
                     <button
-                      onClick={() => toggleEnabled(s.id, s.enabled)}
+                      onClick={() => toggleEnabled(s.id, s.enabled, s.source)}
                       title={s.enabled ? '비활성화' : '활성화'}
                       style={{
                         width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer',
@@ -181,9 +194,12 @@ export default function SchedulesPage() {
                         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{s.name}</span>
                         <code style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-canvas)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px' }}>{s.cron_expr}</code>
                         <span style={{ fontSize: 11, color: 'var(--accent)' }}>{cronHuman(s.cron_expr)}</span>
+                        {s.source === 'local' && (
+                          <span style={{ fontSize: 9, color: 'var(--accent-purple)', background: '#9747ff14', border: '1px solid #9747ff33', borderRadius: 3, padding: '1px 5px', fontWeight: 600 }}>로컬</span>
+                        )}
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {s.task}
+                        {parseTask(s.payload)}
                       </div>
                       <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--text-muted)' }}>
                         <span>마지막 실행: {tsToStr(s.last_run_at)}</span>
@@ -194,7 +210,7 @@ export default function SchedulesPage() {
                     {/* 액션 */}
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                       <button onClick={() => startEdit(s)} style={{ fontSize: 11, padding: '4px 10px', background: 'none', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit' }}>수정</button>
-                      <button onClick={() => deleteSchedule(s.id, s.name)} style={{ fontSize: 11, padding: '4px 10px', background: 'none', border: '1px solid var(--danger)', borderRadius: 4, cursor: 'pointer', color: 'var(--danger)', fontFamily: 'inherit' }}>삭제</button>
+                      <button onClick={() => deleteSchedule(s.id, s.name, s.source)} style={{ fontSize: 11, padding: '4px 10px', background: 'none', border: '1px solid var(--danger)', borderRadius: 4, cursor: 'pointer', color: 'var(--danger)', fontFamily: 'inherit' }}>삭제</button>
                     </div>
                   </div>
                 )}

@@ -215,6 +215,7 @@ export async function initSchema(): Promise<void> {
     `CREATE TABLE IF NOT EXISTS schedules (
       id           TEXT PRIMARY KEY,
       org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
       workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
       name         TEXT NOT NULL,
       cron_expr    TEXT NOT NULL,
@@ -289,6 +290,9 @@ export async function initSchema(): Promise<void> {
   for (const ddl of tables) {
     await pool.query(ddl);
   }
+
+  // 마이그레이션: schedules에 user_id 추가
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`);
 
   // 서버 재시작 시 running/assigned 상태 작업 정리
   await pool.query(`UPDATE tasks SET status = 'failed' WHERE status IN ('running', 'assigned')`);

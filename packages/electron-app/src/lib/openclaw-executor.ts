@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { findOpenClawBinary } from './gateway-manager';
 import { isGatewayAvailable, isGatewayReady } from './openclaw-client';
+import { CLAUDE_CLI, CLAUDE_ENV } from './claude-cli';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,9 +34,11 @@ export interface CronAddParams {
 export interface CronJob {
   id: string;
   name: string;
-  schedule: string;
-  next_run?: string;
   enabled: boolean;
+  createdAtMs?: number;
+  schedule?: { kind: string; expr: string; tz?: string };
+  payload?: { kind: string; message: string };
+  state?: { nextRunAtMs?: number };
 }
 
 export interface CronResult {
@@ -54,6 +57,14 @@ export interface AgentRunParams {
   deliver?: boolean;
   channel?: string;
   to?: string;
+
+  // 통합 실행 확장 필드
+  cwd?: string;
+  allowTools?: boolean;
+  imagePaths?: string[];
+  systemPrompt?: string;
+  mcpConfigPath?: string;
+  extraEnv?: Record<string, string>;
 }
 
 export interface AgentResult {
@@ -124,7 +135,8 @@ export async function cronList(): Promise<CronJob[]> {
       encoding: 'utf8',
       timeout: 15_000,
     });
-    return JSON.parse(stdout);
+    const parsed = JSON.parse(stdout);
+    return parsed.jobs ?? parsed;
   } catch {
     return [];
   }
@@ -135,7 +147,37 @@ export async function cronRemove(jobId: string): Promise<{ ok: boolean; error?: 
   if (!binary) return { ok: false, error: 'openclaw_not_found' };
 
   try {
-    await execFileAsync(binary, ['cron', 'remove', jobId, '--json'], {
+    await execFileAsync(binary, ['cron', 'rm', jobId, '--json'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function cronEnable(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  const binary = findOpenClawBinary();
+  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+
+  try {
+    await execFileAsync(binary, ['cron', 'enable', jobId], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function cronDisable(jobId: string): Promise<{ ok: boolean; error?: string }> {
+  const binary = findOpenClawBinary();
+  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+
+  try {
+    await execFileAsync(binary, ['cron', 'disable', jobId], {
       encoding: 'utf8',
       timeout: 15_000,
     });
@@ -167,20 +209,55 @@ async function agentRunViaGateway(params: AgentRunParams): Promise<AgentResult> 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (GATEWAY_TOKEN) headers['Authorization'] = `Bearer ${GATEWAY_TOKEN}`;
 
+  // 시스템 프롬프트 + 이미지 경로를 메시지에 포함
+  const messages: { role: string; content: string | object[] }[] = [];
+
+  if (params.systemPrompt) {
+    messages.push({ role: 'system', content: params.systemPrompt });
+  }
+
+  // 이미지가 있으면 멀티모달 메시지 구성
+  if (params.imagePaths?.length) {
+    const content: object[] = [{ type: 'text', text: params.message }];
+    for (const imgPath of params.imagePaths) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: `file://${imgPath}` },
+      });
+    }
+    messages.push({ role: 'user', content });
+  } else {
+    messages.push({ role: 'user', content: params.message });
+  }
+
+  // Gateway 요청 body 구성
+  const body: Record<string, unknown> = {
+    model: params.agent ? `openclaw/${params.agent}` : 'openclaw',
+    messages,
+    stream: false,
+  };
+
+  // Gateway 확장 필드 (OpenClaw이 CLI 백엔드에 전달)
+  // 보안: extraEnv(vault 시크릿)는 HTTP body에 포함하지 않음.
+  // Gateway 프로세스의 환경변수로 이미 전달됨 (gateway-manager.ts 참조)
+  if (params.cwd || params.allowTools || params.mcpConfigPath) {
+    body['openclaw'] = {
+      cwd: params.cwd,
+      allow_tools: params.allowTools,
+      mcp_config_path: params.mcpConfigPath,
+    };
+  }
+
   const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      model: params.agent ? `openclaw/${params.agent}` : 'openclaw',
-      messages: [{ role: 'user', content: params.message }],
-      stream: false,
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout((params.timeout ?? 300) * 1000),
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    return { ok: false, error: `Gateway ${res.status}: ${body}` };
+    const errBody = await res.text().catch(() => '');
+    return { ok: false, error: `Gateway ${res.status}: ${errBody}` };
   }
 
   const data = await res.json() as { choices?: { message?: { content?: string } }[] };
@@ -188,24 +265,52 @@ async function agentRunViaGateway(params: AgentRunParams): Promise<AgentResult> 
 }
 
 async function agentRunViaCli(params: AgentRunParams): Promise<AgentResult> {
-  const binary = findOpenClawBinary();
-  if (!binary) return { ok: false, error: 'openclaw_not_found' };
+  // claude CLI 직접 실행 (구독 인증 사용)
+  const args = ['-p', params.message];
 
-  const args = ['agent', '-m', params.message, '--json'];
-  if (params.agent) args.push('--agent', params.agent);
-  if (params.thinking) args.push('--thinking', params.thinking);
   if (params.model) args.push('--model', params.model);
-  if (params.timeout) args.push('--timeout', String(params.timeout));
-  if (params.sessionId) args.push('--session', params.sessionId);
+  if (params.allowTools) args.push('--allowedTools', 'Edit,Write,Read,Bash', '--dangerously-skip-permissions');
+  if (params.systemPrompt) args.push('--append-system-prompt', params.systemPrompt);
+  if (params.mcpConfigPath) args.push('--mcp-config', params.mcpConfigPath);
+
+  // 이미지 경로 추가
+  if (params.imagePaths?.length) {
+    for (const imgPath of params.imagePaths) {
+      args.push(imgPath);
+    }
+  }
 
   try {
-    const { stdout } = await execFileAsync(binary, args, {
+    const { stdout } = await execFileAsync(CLAUDE_CLI, args, {
       encoding: 'utf8',
       timeout: (params.timeout ?? 300) * 1000 + 10_000,
+      cwd: params.cwd || process.cwd(),
+      env: { ...CLAUDE_ENV, ...params.extraEnv },
+      maxBuffer: 10 * 1024 * 1024,
     });
-    const parsed = JSON.parse(stdout);
-    return { ok: true, output: parsed.output ?? parsed.content ?? stdout };
+    return { ok: true, output: stdout.trim() };
   } catch (err) {
+    // 타임아웃 시 1회 재시도
+    const e = err as NodeJS.ErrnoException & { killed?: boolean; stdout?: string };
+    if (e.killed || e.code === 'ETIMEDOUT') {
+      try {
+        await new Promise(r => setTimeout(r, 3000));
+        const { stdout } = await execFileAsync(CLAUDE_CLI, args, {
+          encoding: 'utf8',
+          timeout: (params.timeout ?? 300) * 1000 + 10_000,
+          cwd: params.cwd || process.cwd(),
+          env: { ...CLAUDE_ENV, ...params.extraEnv },
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        return { ok: true, output: stdout.trim() };
+      } catch (retryErr) {
+        return { ok: false, error: retryErr instanceof Error ? retryErr.message : String(retryErr) };
+      }
+    }
+    // maxBuffer 초과 시 부분 출력 반환
+    if (e.code === 'ERR_CHILD_PROCESS_STDOUT_MAX_BUFFER_SIZE' && e.stdout && e.stdout.trim().length > 50) {
+      return { ok: true, output: e.stdout.trim() };
+    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

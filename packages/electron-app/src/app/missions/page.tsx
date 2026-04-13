@@ -261,19 +261,20 @@ export default function MissionsPage() {
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
 
-      // routing 분석이 완료될 때까지 폴링 (최대 120초)
+      // routing 분석이 완료될 때까지 폴링 (최대 310초 — 백엔드 timeout 300s + 여유 10s)
       let mission = d.mission;
-      const deadline = Date.now() + 120_000;
-      while (mission.status === 'analyzing' && Date.now() < deadline) {
+      const deadline = Date.now() + 310_000;
+      while ((mission.status === 'analyzing' || mission.status === 'routing_failed') && Date.now() < deadline) {
         await new Promise(res => setTimeout(res, 2500));
         const pollRes = await fetch(`/api/missions/${mission.id}`).catch(() => null);
         if (pollRes?.ok) {
           const pollData = await pollRes.json();
           if (pollData.ok) mission = pollData.mission;
         }
+        // routing_failed 상태가 routed로 바뀔 수 있으므로 계속 대기
       }
 
-      if (mission.status === 'routing_failed') throw new Error('라우팅 분석 실패 — 다시 시도해주세요');
+      if (mission.status === 'routing_failed') throw new Error(mission.error || '라우팅 분석 실패 — 다시 시도해주세요');
       if (mission.status === 'analyzing') throw new Error('라우팅 분석 시간 초과 — 다시 시도해주세요');
 
       setCurrent({ ...mission, routing: mission.routing || [] });
@@ -333,21 +334,40 @@ export default function MissionsPage() {
             } else if (ev.type === 'error') {
               streamCompleted = true;
               setErr(ev.error);
+              // 스텝은 완료됐지만 통합 문서 생성 등에서 실패한 경우 — 폴링으로 최종 상태 재확인
+              if (missionId) {
+                setTimeout(async () => {
+                  try {
+                    const res = await fetch(`/api/missions/${missionId}`);
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    if (d.ok && d.mission?.status === 'done') {
+                      setErr('');
+                      setSteps(d.mission.steps || []);
+                      setFinalDoc(d.mission.final_doc || '');
+                      setCurrent(d.mission);
+                      setView('result');
+                      reload();
+                    }
+                  } catch {}
+                }, 5000);
+              }
             }
           } catch { /* skip parse errors */ }
         }
       }
-    } catch {
+    } catch (sseErr) {
       // SSE 연결 끊김 — 백엔드에서 아직 실행 중일 수 있으므로 상태 확인
       if (!streamCompleted) {
-        await pollMissionUntilSettled(missionId);
+        const reason = sseErr instanceof Error ? sseErr.message : String(sseErr);
+        await pollMissionUntilSettled(missionId, reason);
       }
     }
   };
 
   // SSE 끊김 시 백엔드 미션 상태를 폴링하여 실제 결과 반영
-  const pollMissionUntilSettled = async (missionId: string) => {
-    setErr('서버 연결이 끊겼습니다. 백그라운드 실행 상태를 확인 중...');
+  const pollMissionUntilSettled = async (missionId: string, reason?: string) => {
+    setErr(`실시간 연결이 재설정되었습니다. 백그라운드 실행 상태를 확인 중...`);
     const deadline = Date.now() + 5 * 60 * 1000; // 최대 5분 폴링
 
     while (Date.now() < deadline) {
@@ -441,6 +461,19 @@ export default function MissionsPage() {
     if (!confirm('이 미션을 삭제할까요?')) return;
     await fetch(`/api/missions?id=${id}`, { method: 'DELETE' });
     reload();
+  };
+
+  const isRecentMission = (m: any) => {
+    const now = Math.floor(Date.now() / 1000);
+    return (now - (m.created_at || 0)) < 300; // 5분 이내
+  };
+
+  const getStatusBadge = (m: any) => {
+    // routing_failed 이지만 5분 이내 미션은 아직 분석 중으로 표시 (CLI 재시도 가능)
+    if (m.status === 'routing_failed' && isRecentMission(m)) {
+      return { label: '분석 중', color: '#8b5cf6' };
+    }
+    return STATUS_BADGE[m.status] || { label: m.status, color: 'var(--text-muted)' };
   };
 
   const STATUS_BADGE: Record<string, { label: string; color: string }> = {
@@ -553,20 +586,29 @@ export default function MissionsPage() {
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     {m.routing.length}개 조직 배정 · {new Date((m.created_at || 0) * 1000).toLocaleDateString('ko')}
                   </div>
-                  {(m.status === 'failed' || m.status === 'routing_failed') && m.error && (
+                  {(m.status === 'failed' || (m.status === 'routing_failed' && !isRecentMission(m))) && m.error && (
                     <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4, lineHeight: 1.5 }}>
-                      {m.error.length > 120 ? m.error.slice(0, 120) + '...' : m.error}
+                      오류: {m.error.length > 120 ? m.error.slice(0, 120) + '...' : m.error}
+                    </div>
+                  )}
+                  {m.status === 'running' && m.steps?.some((s: Step) => s.status === 'failed') && (
+                    <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4, lineHeight: 1.5 }}>
+                      일부 실패: {m.steps.filter((s: Step) => s.status === 'failed').map((s: Step) => `[${s.org_name}] ${s.error || '알 수 없음'}`).join(', ').slice(0, 120)}
                     </div>
                   )}
                 </div>
-                <span style={{
-                  fontSize: 10, fontWeight: 600, padding: '3px 10px', borderRadius: 12,
-                  color: STATUS_BADGE[m.status]?.color || 'var(--text-muted)',
-                  background: (STATUS_BADGE[m.status]?.color || 'var(--text-muted)') + '18',
-                  border: `1px solid ${(STATUS_BADGE[m.status]?.color || 'var(--text-muted)')}33`,
-                }}>
-                  {STATUS_BADGE[m.status]?.label || m.status}
-                </span>
+                {(() => {
+                  const badge = getStatusBadge(m);
+                  return (
+                    <span style={{
+                      fontSize: 10, fontWeight: 600, padding: '3px 10px', borderRadius: 12,
+                      color: badge.color, background: badge.color + '18',
+                      border: `1px solid ${badge.color}33`,
+                    }}>
+                      {badge.label}
+                    </span>
+                  );
+                })()}
                 {m.status === 'failed' && (
                   <button onClick={e => { e.stopPropagation(); resumeMission(m); }}
                     style={{ background: 'none', border: '1px solid #f59e0b', color: '#f59e0b', cursor: 'pointer', fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 4, fontFamily: 'inherit' }}
@@ -1110,7 +1152,21 @@ export default function MissionsPage() {
               </div>
             )}
 
-            {err && <div style={{ color: 'var(--danger)', fontSize: 11, padding: '6px 10px', background: 'var(--danger-dim)', borderRadius: 4, border: '1px solid #f2482233', marginTop: 10 }}>{err}</div>}
+            {err && (
+              err.includes('확인 중') ? (
+                <div style={{ marginTop: 16, padding: '12px 18px', background: 'var(--accent-dim)', borderRadius: 8, border: '1px solid var(--accent)33' }}>
+                  <div style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 500 }}>{err}</div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 16, padding: '14px 18px', background: 'var(--danger-dim)', borderRadius: 8, border: '1px solid #f2482244' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 14 }}>⚠</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger)' }}>오류 발생</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{err}</div>
+                </div>
+              )
+            )}
           </div>
         )}
 

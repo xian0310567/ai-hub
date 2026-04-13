@@ -11,6 +11,7 @@ const SCHEDULER_INTERVAL_MS = Number(process.env.SCHEDULER_POLL_MS) || 60_000;
 type ScheduleRow = {
   id: string;
   org_id: string;
+  user_id: string | null;
   workspace_id: string | null;
   name: string;
   cron_expr: string;
@@ -19,7 +20,7 @@ type ScheduleRow = {
 };
 
 /** Compute next unix-second timestamp after `after` for the given cron expression. */
-function nextCronTs(cronExpr: string, after = new Date()): number {
+export function nextCronTs(cronExpr: string, after = new Date()): number {
   const interval = cronParser.parseExpression(cronExpr, { currentDate: after });
   return Math.floor(interval.next().getTime() / 1000);
 }
@@ -29,7 +30,7 @@ async function tick(): Promise<void> {
 
   // Find all enabled schedules due to run
   const { rows: due } = await getPool().query<ScheduleRow>(`
-    SELECT id, org_id, workspace_id, name, cron_expr, payload, next_run_at
+    SELECT id, org_id, user_id, workspace_id, name, cron_expr, payload, next_run_at
     FROM schedules
     WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at <= $1
   `, [ts]);
@@ -40,14 +41,16 @@ async function tick(): Promise<void> {
 
     // Create a scheduled task
     const taskId = newId();
+    const description = (payload.task as string) ?? (payload.description as string) ?? sched.name;
     await exec(`
       INSERT INTO tasks(id,org_id,triggered_by,title,description,trigger_type,required_vaults)
-      VALUES($1,$2,NULL,$3,$4,'scheduled','[]')
+      VALUES($1,$2,$3,$4,$5,'scheduled','[]')
     `, [
       taskId,
       sched.org_id,
+      sched.user_id,
       sched.name,
-      (payload.description as string) ?? sched.name,
+      description,
     ]);
 
     // Advance schedule

@@ -169,11 +169,15 @@ try {
   }
 } catch {}
 
-// 서버 재시작 시 stuck 잡 정리 (핫 리로드 시 중복 실행 방지)
+// 서버 재시작 시 stuck 잡 정리
+// 단, dev 모드 HMR에서는 실행 중인 미션을 건드리지 않음 (SSE callback이 살아있을 수 있음)
 if (!globalDb.__localDbInitDone) {
   globalDb.__localDbInitDone = true;
-  db.prepare("UPDATE missions SET status='failed' WHERE status IN ('analyzing','running')").run();
-  db.prepare("UPDATE mission_jobs SET status='failed' WHERE status IN ('running','gate_pending')").run();
+  // analyzing은 10분 이상 된 것만 실패 처리 (CLI 프로세스가 아직 살아있을 수 있음)
+  db.prepare("UPDATE missions SET status='routing_failed', error='서버 재시작으로 분석이 중단되었습니다' WHERE status='analyzing' AND updated_at < unixepoch() - 600").run();
+  // running 미션은 5분 이상 된 것만 정리 (최근 것은 아직 실행 중일 수 있음)
+  db.prepare("UPDATE missions SET status='failed', error='서버 재시작으로 실행이 중단되었습니다' WHERE status='running' AND updated_at < unixepoch() - 300").run();
+  db.prepare("UPDATE mission_jobs SET status='failed', error='서버 재시작' WHERE status IN ('running','gate_pending') AND started_at < unixepoch() - 300").run();
 }
 
 export default db;

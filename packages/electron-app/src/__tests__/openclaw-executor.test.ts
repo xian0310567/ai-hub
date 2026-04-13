@@ -30,6 +30,11 @@ vi.mock('../lib/openclaw-client.js', () => ({
   isGatewayReady: mockGatewayReady,
 }));
 
+vi.mock('../lib/claude-cli.js', () => ({
+  CLAUDE_CLI: '/usr/local/bin/claude',
+  CLAUDE_ENV: { PATH: '/usr/local/bin', HOME: '/home/test' },
+}));
+
 // ── Import after mocks ──────────────────────────────────────────────
 
 import {
@@ -176,15 +181,14 @@ describe('agentRun', () => {
 
   it('falls back to CLI when Gateway unavailable', async () => {
     mockGatewayReady.mockResolvedValue(false);
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"CLI 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: 'CLI 결과' });
 
     const result = await agentRun({ message: '테스트', timeout: 60 });
 
     expect(result).toEqual({ ok: true, output: 'CLI 결과' });
     expect(mockExecFile).toHaveBeenCalledWith(
-      '/usr/local/bin/openclaw',
-      ['agent', '-m', '테스트', '--json', '--timeout', '60'],
+      '/usr/local/bin/claude',
+      ['-p', '테스트'],
       expect.objectContaining({ timeout: 70_000 }),
     );
   });
@@ -192,8 +196,7 @@ describe('agentRun', () => {
   it('falls back to CLI when Gateway request throws', async () => {
     mockGatewayReady.mockResolvedValue(true);
     mockFetch.mockRejectedValueOnce(new Error('Gateway timeout'));
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"폴백 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: '폴백 결과' });
 
     const result = await agentRun({ message: '테스트' });
     expect(result).toEqual({ ok: true, output: '폴백 결과' });
@@ -206,8 +209,7 @@ describe('agentRun', () => {
       status: 500,
       text: async () => 'Internal Server Error',
     });
-    mockFindBinary.mockReturnValue('/usr/local/bin/openclaw');
-    mockExecFile.mockResolvedValueOnce({ stdout: '{"output":"CLI 폴백 결과"}' });
+    mockExecFile.mockResolvedValueOnce({ stdout: 'CLI 폴백 결과' });
 
     const result = await agentRun({ message: '테스트' });
     expect(result).toEqual({ ok: true, output: 'CLI 폴백 결과' });
@@ -215,11 +217,11 @@ describe('agentRun', () => {
 
   it('returns error when both Gateway and CLI fail', async () => {
     mockGatewayReady.mockResolvedValue(false);
-    mockFindBinary.mockReturnValue(null);
+    mockExecFile.mockRejectedValueOnce(new Error('Command failed'));
 
     const result = await agentRun({ message: '테스트' });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe('openclaw_not_found');
+    expect(result.error).toContain('Command failed');
   });
 });
 

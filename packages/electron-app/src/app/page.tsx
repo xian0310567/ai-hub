@@ -77,6 +77,7 @@ export default function Dashboard() {
   const loadMissions = useCallback((resumePoll: (id: string) => void, resumeRunningPoll: (id: string) => void) => {
     fetch('/api/missions').then(r=>r.json()).then(d=>{
       if (!d.ok) return;
+      const now = Math.floor(Date.now() / 1000);
       const loaded: MissionItem[] = d.missions.map((m: any) => {
         let stepsData: any = null;
         try { stepsData = m.steps ? JSON.parse(m.steps) : null; } catch {}
@@ -84,13 +85,16 @@ export default function Dashboard() {
         const metaObj = Array.isArray(stepsData) ? {} : (stepsData || {});
         const execSteps: any[] = Array.isArray(stepsData) ? stepsData : [];
 
+        // routing_failed 이지만 5분 이내 생성된 미션은 아직 분석 중으로 취급 (CLI 재시도 가능)
+        const isRecentRoutingFail = m.status === 'routing_failed' && (now - (m.created_at || 0)) < 300;
+
         let phase: MissionItem['phase'] = 'routing';
         if      (m.status === 'done')               phase = 'done';
         else if (m.status === 'failed')             phase = 'error';
         else if (m.status === 'running')            phase = 'running';
         else if (m.status === 'routed')             phase = 'confirm';
         else if (m.status === 'needs_clarification') phase = 'clarify';
-        else if (m.status === 'routing_failed')     phase = 'error';
+        else if (m.status === 'routing_failed')     phase = isRecentRoutingFail ? 'routing' : 'error';
         else if (m.status === 'analyzing')          phase = 'routing';
 
         return {
@@ -99,11 +103,11 @@ export default function Dashboard() {
           clarify: phase === 'clarify' ? metaObj.clarification : null,
           steps: execSteps,
           doc: m.final_doc || '',
-          err: (phase === 'error') ? (m.status === 'routing_failed' ? '라우팅 분석 실패' : '실행 실패') : '',
+          err: (phase === 'error') ? (m.error || (m.status === 'routing_failed' ? '라우팅 분석 실패' : '실행 실패')) : '',
         } as MissionItem;
       });
       setMissions(loaded);
-      // analyzing 상태인 미션은 폴링 재개
+      // analyzing 또는 최근 routing_failed 미션은 폴링 재개
       loaded.filter(m => m.phase === 'routing').forEach(m => resumePoll(m.id));
       // running 상태인 미션은 진행 상황 폴링 재개
       loaded.filter(m => m.phase === 'running').forEach(m => resumeRunningPoll(m.id));
@@ -195,24 +199,33 @@ export default function Dashboard() {
 
         // steps와 progress 업데이트
         updateMission(missionId, {
-          steps: d.steps || [],
-          progress: d.progress,
+          steps: d.mission?.steps || [],
+          progress: d.mission?.progress,
         });
 
         // 미션 완료/실패 시 폴링 중단
         if (d.mission?.status === 'done') {
+          console.log(`[polling] mission ${missionId}: done`);
           stopRunningPolling(missionId);
-          updateMission(missionId, { phase: 'done' });
+          updateMission(missionId, { phase: 'done', doc: d.mission.final_doc || '' });
         } else if (d.mission?.status === 'failed') {
+          const stepErrors = (d.mission?.steps || []).filter((s: any) => s.error).map((s: any) => `[${s.org_name}] ${s.error}`);
+          const detail = d.mission.error || stepErrors.join('; ') || '실행 실패';
+          console.error(`[polling] mission ${missionId}: failed —`, detail);
           stopRunningPolling(missionId);
-          updateMission(missionId, { phase: 'error', err: '실행 실패' });
+          updateMission(missionId, { phase: 'error', err: detail });
         }
       } catch {}
     }, 2000);
   }, [stopRunningPolling, updateMission]);
 
+  // 폴링 시작 시각 추적 (최대 5분까지 폴링)
+  const pollStartRefs = useRef<Record<string, number>>({});
+  const POLL_MAX_MS = 310_000; // 백엔드 timeout(300s) + 여유 10s
+
   const startPolling = useCallback((missionId: string) => {
     stopPolling(missionId);
+    pollStartRefs.current[missionId] = Date.now();
     pollRefs.current[missionId] = setInterval(async () => {
       try {
         const r = await fetch(`/api/missions/${missionId}`);
@@ -223,6 +236,7 @@ export default function Dashboard() {
 
         if (m.status === 'routed') {
           stopPolling(missionId);
+          delete pollStartRefs.current[missionId];
           updateMission(missionId, {
             phase: 'confirm', clarify: null,
             data: { id: m.id, task: m.task, summary: meta.summary, routing: m.routing },
@@ -230,6 +244,7 @@ export default function Dashboard() {
           if (meta.new_org_needed?.length > 0) reloadNotifs();
         } else if (m.status === 'needs_clarification') {
           stopPolling(missionId);
+          delete pollStartRefs.current[missionId];
           updateMission(missionId, {
             phase: 'clarify',
             clarify: meta.clarification,
@@ -237,8 +252,18 @@ export default function Dashboard() {
           });
           if (meta.new_org_needed?.length > 0) reloadNotifs();
         } else if (m.status === 'routing_failed') {
+          const elapsed = Date.now() - (pollStartRefs.current[missionId] || 0);
+          if (elapsed > POLL_MAX_MS) {
+            // 최대 대기 시간 초과 — 최종 실패 처리
+            stopPolling(missionId);
+            delete pollStartRefs.current[missionId];
+            updateMission(missionId, { phase: 'error', err: m.error || '라우팅 분석에 실패했습니다' });
+          }
+          // 아직 대기 시간 내 — 백엔드가 stdout 재파싱으로 복구할 수 있으므로 폴링 유지
+        } else if (m.status !== 'analyzing') {
+          // 예상 외 상태 — 폴링 중단
           stopPolling(missionId);
-          updateMission(missionId, { phase: 'error', err: '라우팅 분석에 실패했습니다' });
+          delete pollStartRefs.current[missionId];
         }
       } catch {}
     }, 2000);
@@ -387,19 +412,34 @@ export default function Dashboard() {
       doc: '', err: '',
     });
 
-    // 진행 상황 폴링 시작
+    // SSE + 폴링 병행: SSE는 실시간 이벤트, 폴링은 SSE 끊김 시 안전망
     startRunningPolling(missionId);
+
     try {
       const resp = await fetch(`/api/missions/${missionId}/run`, { method: 'POST' });
+      console.log(`[runMission] POST /run → ${resp.status}`);
       if (!resp.ok) {
-        stopRunningPolling(missionId);
+        // 서버가 실행 자체를 거부 → 실제 서버 상태 재확인 후 판정
         const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.warn(`[runMission] 서버 거부:`, errData);
+        // 서버가 거부했으므로 서버 상태를 한번 더 확인
+        try {
+          const check = await fetch(`/api/missions/${missionId}/status`);
+          const cd = await check.json();
+          if (cd.ok && cd.mission?.status === 'done') {
+            stopRunningPolling(missionId);
+            updateMission(missionId, { phase: 'done', doc: cd.mission.final_doc || '' });
+            return;
+          }
+        } catch {}
+        stopRunningPolling(missionId);
         updateMission(missionId, { phase: 'error', err: errData.error || `실행 요청 실패 (${resp.status})` });
         return;
       }
       const reader = resp.body!.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      let sseSettled = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -416,18 +456,28 @@ export default function Dashboard() {
                 ...m, steps: m.steps.map((s: any, i: number) => i === ev.idx ? { ...s, status: ev.status, output: ev.output, error: ev.error } : s)
               } : m));
             } else if (ev.type === 'done') {
+              sseSettled = true;
               stopRunningPolling(missionId);
               updateMission(missionId, { phase: 'done', doc: ev.final_doc });
             } else if (ev.type === 'error') {
+              console.error(`[runMission] SSE error event:`, ev.error);
+              sseSettled = true;
               stopRunningPolling(missionId);
               updateMission(missionId, { phase: 'error', err: ev.error });
             }
           } catch {}
         }
       }
-    } catch (e: any) {
-      stopRunningPolling(missionId);
-      updateMission(missionId, { err: e.message, phase: 'error' });
+      // SSE 스트림이 done/error 없이 종료된 경우 — 폴링이 최종 상태를 잡아줌
+      if (!sseSettled && !runningPollRefs.current[missionId]) {
+        startRunningPolling(missionId);
+      }
+    } catch (sseErr) {
+      console.warn(`[runMission] SSE 연결 실패:`, sseErr);
+      // SSE fetch/read 실패 — 폴링이 최종 상태를 잡아줌
+      if (!runningPollRefs.current[missionId]) {
+        startRunningPolling(missionId);
+      }
     }
   }, [updateMission, startRunningPolling, stopRunningPolling]);
 
@@ -587,32 +637,36 @@ export default function Dashboard() {
                 <button className="mc-delete-btn" onClick={e=>{e.stopPropagation();removeMission(m.id);}}>✕</button>
               </div>
 
-              {/* 진행률 바 (running 상태 미션만) */}
-              {m.phase==='running' && m.progress && (
+              {/* 진행률 바 + 간략 step 목록 (running 상태 미션만) */}
+              {m.phase==='running' && m.steps.length > 0 && (
                 <div onClick={e=>e.stopPropagation()}>
                   <div className="mission-progress-track">
-                    <div className="mission-progress-fill" style={{width: `${m.progress.percentage}%`}} />
+                    <div className="mission-progress-fill" style={{width: `${m.progress?.percentage ?? 0}%`}} />
                   </div>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,fontSize:10,color:'var(--text-muted)'}}>
-                    <span>{m.progress.completed}/{m.progress.total} 완료</span>
-                    {(() => {
-                      const runningStep = m.steps.find((s:any) => s.status === 'running');
-                      const waitingCount = m.steps.filter((s:any) => s.status === 'waiting' || s.status === 'queued').length;
-                      return (
-                        <div style={{display:'flex',alignItems:'center',gap:6}}>
-                          {runningStep && (
-                            <span style={{color:'var(--accent)',fontWeight:600,fontSize:10}}>
-                              ▶ {runningStep.agent_name}
-                            </span>
-                          )}
-                          {waitingCount > 0 && (
-                            <span style={{color:'var(--text-muted)',fontSize:10}}>
-                              · 대기 {waitingCount}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })()}
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:6,marginBottom:6,fontSize:10,color:'var(--text-muted)'}}>
+                    <span>{m.progress?.completed ?? 0}/{m.progress?.total ?? m.steps.length} 완료</span>
+                    <span>{m.progress?.percentage ?? 0}%</span>
+                  </div>
+                  {/* 간략 step 리스트 */}
+                  <div style={{display:'flex',flexDirection:'column',gap:3}}>
+                    {m.steps.map((s: any, i: number) => (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:6,fontSize:10,padding:'3px 6px',borderRadius:4,
+                        background: s.status==='running' ? '#f59e0b0a' : 'transparent'}}>
+                        <span style={{width:10,textAlign:'center',flexShrink:0}}>
+                          {s.status==='done' ? '✓' : s.status==='running' ? '▶' : s.status==='failed' ? '✕' : '·'}
+                        </span>
+                        <span style={{
+                          color: s.status==='running' ? '#f59e0b' : s.status==='done' ? 'var(--success)' : s.status==='failed' ? 'var(--danger)' : 'var(--text-muted)',
+                          fontWeight: s.status==='running' ? 600 : 400,
+                          flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'
+                        }}>
+                          {s.agent_name || s.org_name}
+                        </span>
+                        <span style={{color:'var(--text-muted)',fontSize:9,flexShrink:0}}>
+                          {s.status==='running' ? '작업 중' : s.status==='done' ? '완료' : s.status==='failed' ? '실패' : s.status==='waiting' ? `대기 #${s.queue_position??''}` : '대기'}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -718,7 +772,17 @@ export default function Dashboard() {
 
                   {m.phase==='error' && (
                     <div>
-                      <div style={{fontSize:11,color:'var(--danger)',marginBottom:8,padding:'8px 10px',background:'var(--danger-dim)',borderRadius:6,border:'1px solid #f2482222'}}>{m.err}</div>
+                      <div style={{fontSize:11,color:'var(--danger)',marginBottom:8,padding:'8px 12px',background:'var(--danger-dim)',borderRadius:6,border:'1px solid #f2482222',lineHeight:1.7}}>
+                        <div style={{fontWeight:600,marginBottom:2}}>실행 실패</div>
+                        <div style={{color:'var(--danger)',opacity:0.85}}>{m.err || '원인을 확인할 수 없습니다'}</div>
+                        {m.steps.filter((s:any)=>s.status==='failed'&&s.error).length > 0 && (
+                          <div style={{marginTop:6,paddingTop:6,borderTop:'1px solid #f2482222'}}>
+                            {m.steps.filter((s:any)=>s.status==='failed'&&s.error).map((s:any,i:number)=>(
+                              <div key={i} style={{fontSize:10,marginTop:2}}>• [{s.org_name}] {s.error}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <button onClick={()=>removeMission(m.id)} className="mission-action-btn secondary">닫기</button>
                     </div>
                   )}

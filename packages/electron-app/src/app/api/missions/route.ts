@@ -201,29 +201,59 @@ export async function POST(req: NextRequest) {
     const promptArgs = ['-p', buildRoutingPrompt(orgChart, task, hasImages)];
     if (hasImages) savedImages.forEach(img => promptArgs.push(img.path));
 
-    setImmediate(() => {
-      execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV },
-        (err, stdout) => {
-          if (err) { Missions.update(id, { status: 'routing_failed', error: claudeSpawnError(err) }); return; }
+    // ── Claude CLI 라우팅 분석 실행 (실패 시 1회 자동 재시도) ──
+    const runRouting = (attempt: number) => {
+      const startMs = Date.now();
+      execFile(CLAUDE_CLI, promptArgs, { cwd, encoding: 'utf8', timeout: 300_000, env: CLAUDE_ENV },
+        (err, stdout, stderr) => {
+          const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+          if (err) {
+            console.error(`[mission/${id}] CLI 에러 (attempt ${attempt}, ${elapsed}s):`, err.message || err);
+            if (stderr?.trim()) console.error(`[mission/${id}] stderr:`, stderr.trim().slice(0, 500));
+          }
+          if (stdout?.trim()) console.log(`[mission/${id}] stdout (${stdout.length}자, ${elapsed}s):`, stdout.trim().slice(0, 200));
+
+          // stdout에서 JSON 추출 시도 (에러가 있어도 stdout에 유효 데이터가 있을 수 있음)
+          const text = (stdout || '').trim();
+          let parsed: any = null;
+
+          if (text) {
+            try {
+              const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+              try { parsed = JSON.parse(cleaned); } catch {
+                const start = text.indexOf('{');
+                const end = text.lastIndexOf('}');
+                if (start !== -1 && end > start) parsed = JSON.parse(text.slice(start, end + 1));
+              }
+            } catch { /* stdout 파싱 실패 */ }
+          }
+
+          const routing = parsed?.routing;
+          const hasValidRouting = Array.isArray(routing) && routing.length > 0;
+
+          // err가 있더라도 stdout에서 유효한 routing을 추출했으면 성공 처리
+          if (err && !hasValidRouting) {
+            // 첫 시도 실패 시 자동 재시도 (1회)
+            if (attempt < 2) {
+              console.log(`[mission/${id}] 재시도 중... (attempt ${attempt + 1})`);
+              runRouting(attempt + 1);
+              return;
+            }
+            Missions.update(id, { status: 'routing_failed', error: claudeSpawnError(err) });
+            return;
+          }
+
+          if (!parsed || !hasValidRouting) {
+            if (attempt < 2) {
+              console.log(`[mission/${id}] 유효한 라우팅 없음, 재시도 중... (attempt ${attempt + 1})`);
+              runRouting(attempt + 1);
+              return;
+            }
+            Missions.update(id, { status: 'routing_failed', error: !parsed ? '라우팅 분석 결과를 받지 못했습니다' : '라우팅 분석 결과에 배정 가능한 에이전트가 없습니다' });
+            return;
+          }
+
           try {
-            // Claude가 JSON 이외 텍스트를 포함하는 경우에도 파싱 시도
-            let parsed: any;
-            const text = stdout.trim();
-            // 1차 시도: 코드 펜스 제거 후 파싱
-            const cleaned = text.replace(/^```json\s*/m, '').replace(/^```\s*/m, '').replace(/\s*```\s*$/m, '').trim();
-            try { parsed = JSON.parse(cleaned); } catch {
-              // 2차 시도: 첫 { 부터 마지막 } 까지 추출
-              const start = text.indexOf('{');
-              const end = text.lastIndexOf('}');
-              if (start === -1 || end === -1 || end <= start) throw new Error('JSON 없음');
-              parsed = JSON.parse(text.slice(start, end + 1));
-            }
-
-            const routing = parsed.routing || [];
-            if (!Array.isArray(routing) || routing.length === 0) {
-              Missions.update(id, { status: 'routing_failed', error: '라우팅 분석 결과에 배정 가능한 에이전트가 없습니다' }); return;
-            }
-
             for (const orgName of (parsed.new_org_needed || [])) {
               Notifications.create({ id: randomUUID(), user_id: user.id, type: 'org_needed',
                 title: `${orgName} 생성 권장`, message: `미션에서 ${orgName}이(가) 필요합니다.`, read: 0 });
@@ -238,6 +268,7 @@ export async function POST(req: NextRequest) {
                 cron_expr: parsed.cron_expr || null,
                 execution_plan: parsed.execution_plan || null }),
             });
+            console.log(`[mission/${id}] 라우팅 완료: ${routing.length}개 조직 배정 (attempt ${attempt}, ${elapsed}s)`);
 
             // 반복 미션이면 스케줄 생성
             if (parsed.is_recurring && parsed.cron_expr && !parsed.needs_clarification) {
@@ -256,10 +287,11 @@ export async function POST(req: NextRequest) {
                 });
               } catch { /* cron 파싱 실패 시 스케줄 생성 생략 */ }
             }
-          } catch (parseErr) { Missions.update(id, { status: 'routing_failed', error: `라우팅 분석 결과 파싱 실패: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}` }); }
+          } catch (parseErr) { Missions.update(id, { status: 'routing_failed', error: `라우팅 처리 실패: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}` }); }
         }
       );
-    });
+    };
+    setImmediate(() => runRouting(1));
 
     return Response.json({ ok: true, mission: { id, task, status: 'analyzing', images: savedImages } });
   } catch (err) {
@@ -320,21 +352,14 @@ ${orgChart}
 ## 사용자 요청
 ${task}
 
-## 실행 수단
+## 실행 시스템
 
-이 시스템은 두 가지 실행 수단을 갖고 있습니다:
-
-### c3 (Claude CLI) — 즉시 실행, 로컬 작업
-- Read, Write, Edit, Bash 도구로 로컬 파일시스템 접근
-- 코드 수정, 빌드, 테스트 실행 가능
-- 게이트웨이 불필요, 독립 프로세스
-- 스케줄링/외부 전송 불가
-
-### OpenClaw — 스케줄링, 외부 전송, 세션
+모든 작업은 OpenClaw을 통해 실행됩니다. OpenClaw은 다음 기능을 제공합니다:
+- 로컬 파일 시스템 접근 (Read, Write, Edit, Bash 도구)
+- 코드 수정, 빌드, 테스트 실행
 - 크론 스케줄링: 1회 예약(at), 반복(cron/every)
 - 채널 전송: Slack, Discord, Telegram 등
 - 영속 세션: 이전 대화 컨텍스트 유지
-- 미디어 처리: 이미지, 음성, 영상
 
 반드시 아래 JSON 형식으로만 답변하세요:
 {
@@ -343,7 +368,7 @@ ${task}
     "pre_tasks": [],
     "post_tasks": []
   },
-  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[],"gate_type":"auto","executor":"c3","executor_reason":"...","capability_tags":[]}],
+  "routing": [{"org_id":"...","org_type":"team","org_name":"...","agent_id":"...","agent_name":"...","subtask":"...","approach":"...","deliverables":[],"gate_type":"auto","capability_tags":[],"thinking":"low","model":null,"timeout_seconds":300}],
   "needs_clarification": false,
   "clarification": null,
   "new_org_needed": [],
@@ -351,16 +376,6 @@ ${task}
   "cron_expr": null,
   "schedule_name": null
 }
-
-executor 판단 기준:
-- 기본값은 "c3" (로컬 Claude CLI 실행)
-- 다음 경우 "openclaw" 사용:
-  · 예약/반복 실행이 필요한 작업 → pre_tasks에 openclaw_cron도 추가
-  · 외부 채널 전송이 필요한 작업 → post_tasks에 openclaw_deliver 추가
-  · 이전 대화 맥락이 필요한 작업
-- 로컬 파일 수정, 코드 작업은 반드시 "c3"
-- 확실하지 않으면 "c3" (더 안전)
-- executor_reason: 왜 해당 executor를 선택했는지 한 문장으로 설명
 
 capability_tags 종류: file_io, code_execution, web_search, scheduling, channel_delivery, persistent_session, media_processing, immediate
 

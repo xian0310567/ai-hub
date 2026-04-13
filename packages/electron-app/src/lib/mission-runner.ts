@@ -2,10 +2,10 @@
  * 미션 백그라운드 실행 — 스케줄러에서 호출
  * SSE 없이 미션을 실행하고 결과를 DB에 저장
  */
-import { Missions, MissionJobs, MissionSchedules } from './db.js';
+import { Missions, MissionJobs } from './db.js';
 import { readAllPersonalSecrets } from './personal-vault.js';
 import { CLAUDE_CLI, CLAUDE_ENV } from './claude-cli.js';
-import { cronAdd, agentRun } from './openclaw-executor.js';
+import { agentRun } from './openclaw-executor.js';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
@@ -49,6 +49,17 @@ async function vmGet(endpoint: string, cookie = '') {
   try {
     const headers: Record<string, string> = cookie ? { Cookie: cookie } : {};
     const res = await fetch(`${VM_URL}${endpoint}`, { headers });
+    return res.ok ? res.json() : null;
+  } catch { return null; }
+}
+
+async function vmPost(endpoint: string, body: object, cookie = '') {
+  try {
+    const res = await fetch(`${VM_URL}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+      body: JSON.stringify(body),
+    });
     return res.ok ? res.json() : null;
   } catch { return null; }
 }
@@ -208,21 +219,15 @@ export async function runMissionBackground(missionId: string, sessionCookie = ''
         if (preTask.type === 'openclaw_cron') {
           const p = preTask.params as Record<string, string>;
           const cronExpr = p.cron || '';
-          const result = await cronAdd({ name: p.name || '미션 크론', cron: cronExpr || undefined, at: p.at, every: p.every, tz: p.tz || 'Asia/Seoul', message: p.message || '', agent: p.agent, thinking: p.thinking, model: p.model });
-          if (!result.ok && cronExpr) {
-            // OpenClaw 크론 실패 → 로컬 스케줄러 폴백
-            try {
-              const cronParser = await import('cron-parser');
-              const interval = cronParser.parseExpression(cronExpr);
-              const nextTs = Math.floor(interval.next().getTime() / 1000);
-              MissionSchedules.create({
-                id: randomUUID(), user_id: mission.user_id,
-                name: p.name || '미션 크론', cron_expr: cronExpr,
-                task: mission.task, routing: mission.routing || '[]',
-                session_cookie: sessionCookie, next_run_at: nextTs,
-              });
-              console.warn(`[mission-runner] OpenClaw 크론 실패, 로컬 스케줄러로 대체 등록: ${result.error}`);
-            } catch { /* cron 파싱 실패 시 무시 */ }
+          if (cronExpr) {
+            const schedRes = await vmPost('/api/schedules', {
+              name: p.name || '미션 크론',
+              cron_expr: cronExpr,
+              payload: JSON.stringify({ task: p.message || mission.task, description: mission.task }),
+            }, sessionCookie);
+            if (!schedRes) {
+              console.warn(`[mission-runner] vm-server 스케줄 등록 실패`);
+            }
           }
         }
       } catch (err) {

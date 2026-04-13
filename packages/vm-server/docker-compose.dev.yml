@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aihub-pg-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aihub
+      POSTGRES_PASSWORD: aihub1234
+      POSTGRES_DB: aihub
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihub"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  vm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: aihub-vm-dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    volumes:
+      # 소스 코드 마운트 → tsx watch가 변경 감지
+      - ./src:/app/src
+    env_file: .env.dev
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://aihub:aihub1234@postgres:5432/aihub
+
+volumes:
+  pg-dev-data:

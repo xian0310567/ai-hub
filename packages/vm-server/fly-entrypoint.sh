@@ -40,8 +40,10 @@ PGCONF
 fi
 
 # ── 데이터 디렉토리 확보 ──────────────────────────────────────────────
+# Fly.io Volume은 root 소유로 마운트되므로 postgres가 쓸 수 있도록 권한 설정
+chown postgres:postgres /data
 mkdir -p /data/backups /data/openclaw-runtime
-chown postgres:postgres "$PGDATA"
+chown postgres:postgres /data/backups /data/openclaw-runtime "$PGDATA"
 
 # ── PostgreSQL 시작 ──────────────────────────────────────────────────
 echo "[fly] PostgreSQL 시작..."

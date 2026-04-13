@@ -59,7 +59,7 @@ jobs:
           [ -d packages/openclaw/assets ] && cp -r packages/openclaw/assets "$BUNDLE/assets"
 
           cd "$BUNDLE"
-          npm install --omit=dev
+          npm install --omit=dev --ignore-scripts
 
       # ── Electron 빌드 ──────────────────────────────────────────────
       - name: Build Next.js

@@ -1,16 +1,16 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: aihub-pg-dev
+    container_name: aihub-pg-staging
     restart: unless-stopped
     environment:
       POSTGRES_USER: aihub
       POSTGRES_PASSWORD: aihub1234
-      POSTGRES_DB: aihub
+      POSTGRES_DB: aihub_staging
     ports:
       - "5432:5432"
     volumes:
-      - pg-dev-data:/var/lib/postgresql/data
+      - pg-staging-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aihub"]
       interval: 5s
@@ -20,8 +20,8 @@ services:
   vm-server:
     build:
       context: .
-      dockerfile: Dockerfile.dev
-    container_name: aihub-vm-dev
+      dockerfile: Dockerfile.staging
+    container_name: aihub-vm-staging
     restart: unless-stopped
     depends_on:
       postgres:
@@ -29,12 +29,11 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      # 소스 코드 마운트 → tsx watch가 변경 감지
       - ./src:/app/src
-    env_file: .env.dev
+    env_file: .env.staging
     environment:
-      NODE_ENV: development
-      DATABASE_URL: postgres://aihub:aihub1234@postgres:5432/aihub
+      NODE_ENV: staging
+      DATABASE_URL: postgres://aihub:aihub1234@postgres:5432/aihub_staging
 
 volumes:
-  pg-dev-data:
+  pg-staging-data:

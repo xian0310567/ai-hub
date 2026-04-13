@@ -32,7 +32,7 @@ jobs:
           elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "target=prod" >> "$GITHUB_OUTPUT"
           else
-            echo "target=dev" >> "$GITHUB_OUTPUT"
+            echo "target=staging" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Deploy to Fly.io (${{ steps.env.outputs.target }})

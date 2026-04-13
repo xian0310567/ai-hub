@@ -90,7 +90,13 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder build --${{ matrix.platform }} --${{ matrix.arch }}
+        shell: bash
+        run: |
+          [ -z "$CSC_LINK" ] && unset CSC_LINK
+          [ -z "$CSC_KEY_PASSWORD" ] && unset CSC_KEY_PASSWORD
+          [ -z "$WIN_CSC_LINK" ] && unset WIN_CSC_LINK
+          [ -z "$WIN_CSC_KEY_PASSWORD" ] && unset WIN_CSC_KEY_PASSWORD
+          npx electron-builder build --${{ matrix.platform }} --${{ matrix.arch }}
 
       # ── 아티팩트 업로드 ────────────────────────────────────────────
       - name: Upload artifacts

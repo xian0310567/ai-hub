@@ -1,0 +1,111 @@
+name: Build Electron App
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac
+            arch: arm64
+          - os: macos-13
+            platform: mac
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # ── OpenClaw 빌드 ──────────────────────────────────────────────
+      - name: Build openclaw
+        run: pnpm --filter openclaw build
+
+      - name: Prepare openclaw bundle
+        shell: bash
+        run: |
+          BUNDLE="packages/electron-app/openclaw-bundle"
+          rm -rf "$BUNDLE"
+          mkdir -p "$BUNDLE"
+
+          cp packages/openclaw/openclaw.mjs "$BUNDLE/"
+          cp packages/openclaw/package.json "$BUNDLE/"
+          cp -r packages/openclaw/dist "$BUNDLE/dist"
+
+          # skills, assets 디렉토리가 있으면 복사
+          [ -d packages/openclaw/skills ] && cp -r packages/openclaw/skills "$BUNDLE/skills"
+          [ -d packages/openclaw/assets ] && cp -r packages/openclaw/assets "$BUNDLE/assets"
+
+          # 프로덕션 의존성만 설치 (native 모듈 포함)
+          cd "$BUNDLE"
+          npm install --omit=dev
+
+      # ── Electron 빌드 ──────────────────────────────────────────────
+      - name: Build Next.js
+        working-directory: packages/electron-app
+        run: npx next build
+
+      - name: Build Electron (${{ matrix.platform }}-${{ matrix.arch }})
+        working-directory: packages/electron-app
+        env:
+          # macOS 코드 서명 (선택 — Secrets에 설정)
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # Windows 코드 서명 (선택)
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # 서명 키 없으면 서명 건너뛰기
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx electron-builder build --${{ matrix.platform }} --${{ matrix.arch }}
+
+      # ── 아티팩트 업로드 ────────────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Hub-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            packages/electron-app/dist/*.dmg
+            packages/electron-app/dist/*.zip
+            packages/electron-app/dist/*.exe
+            packages/electron-app/dist/*.AppImage
+          if-no-files-found: error
+
+  # ── GitHub Release 생성 (태그 푸시 시) ─────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true
+          generate_release_notes: true

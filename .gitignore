@@ -12,3 +12,6 @@ auth.env
 # Playwright
 packages/electron-app/playwright-report/
 packages/electron-app/test-results/
+
+# Electron build - openclaw bundle (CI에서 생성)
+packages/electron-app/openclaw-bundle/

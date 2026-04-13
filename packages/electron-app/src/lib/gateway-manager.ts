@@ -9,8 +9,8 @@ import { spawn, execSync, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
-import { isGatewayAvailable } from './openclaw-client';
-import { readConfig } from './openclaw-config';
+import { isGatewayAvailable, isGatewayReady } from './openclaw-client';
+import { readConfig, writeConfig } from './openclaw-config';
 
 // ── 상태 ──────────────────────────────────────────────────────────────
 
@@ -72,7 +72,22 @@ export function findOpenClawBinary(): string | null {
   const envPath = process.env.OPENCLAW_CLI_PATH;
   if (envPath) return envPath;
 
-  // 2. 로컬 모노레포 워크스페이스 패키지 (packages/openclaw)
+  // 2. Electron 앱에 번들된 openclaw (extraResources)
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    const bundledDir = path.join(resourcesPath, 'openclaw');
+    const bundledMjs = path.join(bundledDir, 'openclaw.mjs');
+    if (existsSync(bundledMjs)) {
+      const hasDistEntry = existsSync(path.join(bundledDir, 'dist', 'entry.js'))
+        || existsSync(path.join(bundledDir, 'dist', 'entry.mjs'));
+      if (hasDistEntry) {
+        console.log(`[Gateway] 번들된 OpenClaw 사용: ${bundledMjs}`);
+        return bundledMjs;
+      }
+    }
+  }
+
+  // 4. 로컬 모노레포 워크스페이스 패키지 (packages/openclaw)
   //    electron-app의 cwd는 packages/electron-app이므로 ../openclaw로 접근
   const localCandidates = [
     path.resolve(process.cwd(), '..', 'openclaw'),                        // packages/openclaw
@@ -95,11 +110,11 @@ export function findOpenClawBinary(): string | null {
     }
   }
 
-  // 3. 시스템 PATH에서 탐색
+  // 5. 시스템 PATH에서 탐색
   try {
     return execSync('which openclaw', { encoding: 'utf8', timeout: 3000 }).trim() || null;
   } catch {
-    // 4. 글로벌 설치 경로 탐색
+    // 6. 글로벌 설치 경로 탐색
     const candidates = [
       `${process.env.HOME}/.npm-global/bin/openclaw`,
       `${process.env.HOME}/.local/bin/openclaw`,
@@ -171,6 +186,12 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
     const config = readConfig();
     if (!config) {
       args.push('--allow-unconfigured');
+    } else if (!config.gateway?.http?.endpoints?.chatCompletions?.enabled) {
+      // chatCompletions 엔드포인트가 비활성화 상태면 자동 보완
+      config.gateway.http = config.gateway.http ?? {};
+      config.gateway.http.endpoints = config.gateway.http.endpoints ?? {};
+      config.gateway.http.endpoints.chatCompletions = { enabled: true };
+      writeConfig(config);
     }
 
     if (configDir) args.push('--config', configDir);
@@ -179,7 +200,13 @@ export async function startGateway(manual = false): Promise<{ ok: boolean; reaso
     let processDied = false;
     let processExitCode: number | null = null;
 
-    _process = spawn(binary, args, {
+    // Windows에서 .mjs 파일은 shebang이 동작하지 않으므로 node로 실행
+    const isWindows = process.platform === 'win32';
+    const isMjs = binary.endsWith('.mjs');
+    const spawnCmd = (isWindows && isMjs) ? 'node' : binary;
+    const spawnArgs = (isWindows && isMjs) ? [binary, ...args] : args;
+
+    _process = spawn(spawnCmd, spawnArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
       env: {
@@ -292,6 +319,30 @@ export async function getGatewayInfo(): Promise<{
     lastError: _lastError,
     needsBuild: _needsBuild,
   };
+}
+
+/**
+ * Gateway가 준비될 때까지 대기한다.
+ * 미가동 시 자동 시작을 시도하고, 최대 waitMs까지 대기.
+ * @returns true면 Gateway 사용 가능, false면 CLI 폴백 필요
+ */
+export async function ensureGatewayReady(waitMs = 30_000): Promise<boolean> {
+  // 이미 준비됐으면 바로 반환
+  if (await isGatewayReady()) return true;
+
+  // 미가동이면 시작 시도
+  if (_state !== 'running' && _state !== 'starting') {
+    await startGateway();
+  }
+
+  // 준비될 때까지 대기
+  const start = Date.now();
+  while (Date.now() - start < waitMs) {
+    if (await isGatewayReady()) return true;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  return false;
 }
 
 // ── Internal ──────────────────────────────────────────────────────────

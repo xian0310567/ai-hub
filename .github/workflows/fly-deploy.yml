@@ -1,0 +1,39 @@
+name: Deploy vm-server to Fly.io
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/vm-server/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "배포 환경"
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "target=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy to Fly.io (${{ steps.env.outputs.target }})
+        working-directory: packages/vm-server
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy -c fly.${{ steps.env.outputs.target }}.toml

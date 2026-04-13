@@ -48,6 +48,20 @@
       "public/**/*",
       "node_modules/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "openclaw-bundle",
+        "to": "openclaw",
+        "filter": [
+          "**/*",
+          "!**/*.map",
+          "!**/*.tsbuildinfo",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/__tests__/**"
+        ]
+      }
+    ],
     "mac": {
       "target": "dmg",
       "category": "public.app-category.productivity"

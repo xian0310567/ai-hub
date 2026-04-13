@@ -63,6 +63,8 @@ jobs:
       # ── Electron 빌드 ──────────────────────────────────────────────
       - name: Build Next.js
         working-directory: packages/electron-app
+        env:
+          VM_SERVER_URL: ${{ github.ref == 'refs/heads/main' && 'https://ai-hub-vm-server.fly.dev' || 'https://ai-hub-vm-server-staging.fly.dev' }}
         run: npx next build
 
       - name: Build Electron (${{ matrix.platform }}-${{ matrix.arch }})

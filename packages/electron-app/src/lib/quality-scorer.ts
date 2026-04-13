@@ -83,6 +83,7 @@ export async function scoreJob(jobId: string, userId: string): Promise<void> {
         type:    'warning',
         title:   `품질 경고: ${job.agent_name}`,
         message: `잡 #${jobId.slice(0, 8)} 평균 품질 점수 ${scores.average}점 (기준 65점 미달)`,
+        read:    0,
       });
     }
   } catch {

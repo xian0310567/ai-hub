@@ -90,8 +90,8 @@ export function findOpenClawBinary(): string | null {
   // 4. 로컬 모노레포 워크스페이스 패키지 (packages/openclaw)
   //    electron-app의 cwd는 packages/electron-app이므로 ../openclaw로 접근
   const localCandidates = [
-    path.resolve(process.cwd(), '..', 'openclaw'),                        // packages/openclaw
-    path.resolve(process.cwd(), '..', '..', 'packages', 'openclaw'),      // 프로젝트 루트에서
+    path.resolve(/*turbopackIgnore: true*/ process.cwd(), '..', 'openclaw'),                        // packages/openclaw
+    path.resolve(/*turbopackIgnore: true*/ process.cwd(), '..', '..', 'packages', 'openclaw'),      // 프로젝트 루트에서
   ];
   for (const localDir of localCandidates) {
     const mjs = path.join(localDir, 'openclaw.mjs');

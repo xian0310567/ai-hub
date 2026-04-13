@@ -15,6 +15,7 @@ const globalDb = globalThis as unknown as { __localDb?: Database.Database; __loc
 if (!globalDb.__localDb) {
   globalDb.__localDb = new Database(path.join(DATA_DIR, 'local.db'));
   globalDb.__localDb.pragma('journal_mode = WAL');
+  globalDb.__localDb.pragma('busy_timeout = 5000');
   globalDb.__localDb.pragma('foreign_keys = ON');
 }
 const db = globalDb.__localDb;

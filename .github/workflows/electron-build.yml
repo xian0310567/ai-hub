@@ -40,6 +40,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: packages/electron-app/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('packages/electron-app/pnpm-lock.yaml', 'packages/electron-app/package.json') }}-${{ hashFiles('packages/electron-app/src/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('packages/electron-app/pnpm-lock.yaml', 'packages/electron-app/package.json') }}-
+            nextjs-${{ runner.os }}-
+
       # ── OpenClaw 빌드 ──────────────────────────────────────────────
       - name: Build openclaw
         run: pnpm --filter openclaw build

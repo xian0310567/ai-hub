@@ -47,7 +47,14 @@ chown postgres:postgres /data/backups /data/openclaw-runtime "$PGDATA"
 
 # ── PostgreSQL 시작 ──────────────────────────────────────────────────
 echo "[fly] PostgreSQL 시작..."
-su postgres -c "pg_ctl start -D $PGDATA -l /data/pg.log -w"
+if ! su postgres -c "pg_ctl start -D $PGDATA -l /data/pg.log -w"; then
+  echo "[fly] PostgreSQL 시작 실패! 로그 내용:"
+  cat /data/pg.log 2>/dev/null || echo "(로그 파일 없음)"
+  echo "[fly] PGDATA 권한 확인:"
+  ls -la /data/
+  ls -la "$PGDATA"/ 2>/dev/null | head -5
+  exit 1
+fi
 echo "[fly] PostgreSQL 준비 완료"
 
 # ── 환경변수 설정 ─────────────────────────────────────────────────────

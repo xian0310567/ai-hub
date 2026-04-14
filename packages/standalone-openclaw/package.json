@@ -1,0 +1,29 @@
+{
+  "name": "standalone-openclaw",
+  "version": "0.1.0",
+  "description": "Standalone OpenClaw + Claude CLI package — run agents without electron-app or vm-server",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "files": [
+    "dist/"
+  ],
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

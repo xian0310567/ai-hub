@@ -13,10 +13,10 @@
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "@types/jsonwebtoken": "^9.0.9",
-    "openclaw": "workspace:*"
+    "standalone-openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.10"
+    "standalone-openclaw": ">=2026.4.10"
   },
   "peerDependenciesMeta": {
     "openclaw": {

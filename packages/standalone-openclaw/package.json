@@ -1,5 +1,5 @@
 {
-  "name": "openclaw",
+  "name": "standalone-openclaw",
   "version": "2026.4.10",
   "description": "Standalone OpenClaw with claude CLI binary backend support (fork of openclaw)",
   "keywords": ["openclaw", "claude-cli", "ai-gateway"],

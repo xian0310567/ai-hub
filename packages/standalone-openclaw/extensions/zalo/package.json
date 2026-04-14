@@ -8,10 +8,10 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "standalone-openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.10"
+    "standalone-openclaw": ">=2026.4.10"
   },
   "peerDependenciesMeta": {
     "openclaw": {

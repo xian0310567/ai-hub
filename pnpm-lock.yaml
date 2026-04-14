@@ -391,6 +391,10 @@ importers:
         version: 0.1.0(encoding@0.1.13)
 
   packages/standalone-openclaw:
+    dependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../openclaw
     devDependencies:
       '@types/node':
         specifier: ^22

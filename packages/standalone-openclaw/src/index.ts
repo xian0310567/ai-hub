@@ -1,123 +1,88 @@
 /**
  * standalone-openclaw
  *
- * electron-app / vm-server 없이 OpenClaw + Claude CLI를 독립적으로 사용하기 위한 패키지.
+ * OpenClaw + Claude CLI를 electron-app / vm-server 없이 독립적으로 사용하기 위한 패키지.
  *
- * 주요 기능:
- * - Claude CLI 바이너리 탐지 및 실행
- * - OpenClaw Gateway 프로세스 관리 (시작/정지/모니터)
- * - OpenClaw Gateway HTTP 클라이언트 (SSE 스트리밍/비스트리밍)
- * - 에이전트 실행 (Gateway 우선, CLI 폴백)
- * - 크론 작업 관리
- * - 설정 파일 관리
+ * openclaw 패키지를 기반으로 하되, Claude CLI 바이너리를 백엔드로 사용하도록
+ * 자동 설정하고, 간편한 프로그래밍 API를 제공합니다.
  *
  * @example
  * ```typescript
- * import {
- *   agentRun,
- *   startGateway,
- *   ensureGatewayReady,
- *   getSetupStatus,
- *   buildDefaultConfig,
- *   writeConfig,
- * } from 'standalone-openclaw';
+ * import { setup, startGateway, runAgent } from 'standalone-openclaw';
  *
- * // 1. 설정 초기화
- * const config = buildDefaultConfig('claude-cli/claude-sonnet-4-6');
- * writeConfig(config);
+ * // 1. Claude CLI 백엔드 설정 (최초 1회)
+ * setup();
  *
- * // 2. Gateway 시작
- * await startGateway();
- * await ensureGatewayReady();
+ * // 2. Gateway 시작 (선택 — 없으면 CLI 직접 호출로 동작)
+ * const gw = await startGateway({ port: 18789 });
  *
- * // 3. 에이전트 실행 (Gateway 우선, 실패 시 Claude CLI 직접 호출)
- * const result = await agentRun({
- *   message: '안녕하세요, 현재 시간을 알려주세요.',
- *   model: 'claude-sonnet-4-6',
+ * // 3. 에이전트 실행
+ * const result = await runAgent({
+ *   message: '현재 디렉터리의 구조를 설명해주세요.',
  *   cwd: '/my/project',
  * });
- *
  * console.log(result.output);
+ *
+ * // 4. 정리
+ * await gw.close();
  * ```
  */
 
-// ── Claude CLI ───────────────────────────────────────────────────────
+// ── Setup & Config ───────────────────────────────────────────────────
 export {
-  CLAUDE_CLI,
-  CLAUDE_ENV,
-  claudeSpawnError,
-} from './claude-cli.js';
-
-// ── OpenClaw Config ──────────────────────────────────────────────────
-export {
-  readConfig,
-  writeConfig,
-  buildDefaultConfig,
-  checkClaudeCli,
-  getSetupStatus,
+  setup,
+  diagnose,
+  readExistingConfig,
   SUPPORTED_MODELS,
   DEFAULT_MODEL,
-} from './openclaw-config.js';
+} from './setup.js';
 
 export type {
-  OpenClawConfig,
-  ClaudeCliStatus,
-  OpenClawSetupStatus,
-} from './openclaw-config.js';
+  SetupOptions,
+  SetupResult,
+  StandaloneConfig,
+} from './setup.js';
 
-// ── OpenClaw Gateway Client ──────────────────────────────────────────
+// ── Claude CLI Resolver ──────────────────────────────────────────────
 export {
-  isGatewayAvailable,
-  isGatewayReady,
-  sendToGateway,
-  sendToGatewaySync,
-  getSessionHistory,
-  killSession,
-  getGatewayStatus,
-} from './openclaw-client.js';
+  resolveClaudeCli,
+} from './claude-cli-resolver.js';
 
 export type {
-  OpenClawMessage,
-  OpenClawSendOptions,
-  OpenClawStreamChunk,
-} from './openclaw-client.js';
+  ClaudeCliInfo,
+} from './claude-cli-resolver.js';
 
-// ── Gateway Process Manager ──────────────────────────────────────────
+// ── Gateway ──────────────────────────────────────────────────────────
 export {
   startGateway,
-  stopGateway,
-  ensureGatewayReady,
-  getGatewayInfo,
-  getGatewayState,
-  getGatewayPid,
-  getRestartCount,
-  findOpenClawBinary,
-  isOpenClawNeedsBuild,
-  gatewayLogs,
-  getLogBuffer,
-  clearLogBuffer,
-} from './gateway-manager.js';
+  isGatewayAlive,
+  isGatewayReady,
+} from './gateway.js';
 
 export type {
-  GatewayState,
-  GatewayLogEntry,
-} from './gateway-manager.js';
+  GatewayOptions,
+  GatewayHandle,
+} from './gateway.js';
 
-// ── Agent Executor ───────────────────────────────────────────────────
+// ── Agent Execution ──────────────────────────────────────────────────
 export {
-  agentRun,
-  executeWithFallback,
-  cronAdd,
-  cronList,
-  cronRemove,
-  cronEnable,
-  cronDisable,
-} from './openclaw-executor.js';
+  runAgent,
+} from './agent.js';
 
 export type {
-  AgentRunParams,
-  AgentResult,
-  CronAddParams,
-  CronJob,
-  CronResult,
-} from './openclaw-executor.js';
+  AgentRunOptions,
+  AgentRunResult,
+} from './agent.js';
+
+// ── OpenClaw re-exports (핵심 유틸리티) ──────────────────────────────
+// openclaw 패키지의 주요 API를 re-export하여 직접 접근 가능하게 함
+export {
+  loadConfig,
+  loadSessionStore,
+  saveSessionStore,
+  resolveStorePath,
+  deriveSessionKey,
+  resolveSessionKey,
+  createDefaultDeps,
+  waitForever,
+} from 'openclaw';

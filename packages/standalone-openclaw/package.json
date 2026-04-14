@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "standalone-openclaw": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,17 +16,21 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "setup": "node dist/cli.js setup"
   },
   "files": [
     "dist/"
   ],
+  "dependencies": {
+    "openclaw": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22",
     "typescript": "^5"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "license": "MIT"
 }

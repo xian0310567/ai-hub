@@ -1,88 +1,103 @@
-/**
- * standalone-openclaw
- *
- * OpenClaw + Claude CLI를 electron-app / vm-server 없이 독립적으로 사용하기 위한 패키지.
- *
- * openclaw 패키지를 기반으로 하되, Claude CLI 바이너리를 백엔드로 사용하도록
- * 자동 설정하고, 간편한 프로그래밍 API를 제공합니다.
- *
- * @example
- * ```typescript
- * import { setup, startGateway, runAgent } from 'standalone-openclaw';
- *
- * // 1. Claude CLI 백엔드 설정 (최초 1회)
- * setup();
- *
- * // 2. Gateway 시작 (선택 — 없으면 CLI 직접 호출로 동작)
- * const gw = await startGateway({ port: 18789 });
- *
- * // 3. 에이전트 실행
- * const result = await runAgent({
- *   message: '현재 디렉터리의 구조를 설명해주세요.',
- *   cwd: '/my/project',
- * });
- * console.log(result.output);
- *
- * // 4. 정리
- * await gw.close();
- * ```
- */
+#!/usr/bin/env node
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+import { formatUncaughtError } from "./infra/errors.js";
+import { isMainModule } from "./infra/is-main.js";
+import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 
-// ── Setup & Config ───────────────────────────────────────────────────
-export {
-  setup,
-  diagnose,
-  readExistingConfig,
-  SUPPORTED_MODELS,
-  DEFAULT_MODEL,
-} from './setup.js';
+type LegacyCliDeps = {
+  installGaxiosFetchCompat: () => Promise<void>;
+  runCli: (argv: string[]) => Promise<void>;
+};
 
-export type {
-  SetupOptions,
-  SetupResult,
-  StandaloneConfig,
-} from './setup.js';
+type LibraryExports = typeof import("./library.js");
 
-// ── Claude CLI Resolver ──────────────────────────────────────────────
-export {
-  resolveClaudeCli,
-} from './claude-cli-resolver.js';
+// These bindings are populated only for library consumers. The CLI entry stays
+// on the lean path and must not read them while running as main.
+export let applyTemplate: LibraryExports["applyTemplate"];
+export let createDefaultDeps: LibraryExports["createDefaultDeps"];
+export let deriveSessionKey: LibraryExports["deriveSessionKey"];
+export let describePortOwner: LibraryExports["describePortOwner"];
+export let ensureBinary: LibraryExports["ensureBinary"];
+export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
+export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
+export let handlePortError: LibraryExports["handlePortError"];
+export let loadConfig: LibraryExports["loadConfig"];
+export let loadSessionStore: LibraryExports["loadSessionStore"];
+export let monitorWebChannel: LibraryExports["monitorWebChannel"];
+export let normalizeE164: LibraryExports["normalizeE164"];
+export let PortInUseError: LibraryExports["PortInUseError"];
+export let promptYesNo: LibraryExports["promptYesNo"];
+export let resolveSessionKey: LibraryExports["resolveSessionKey"];
+export let resolveStorePath: LibraryExports["resolveStorePath"];
+export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
+export let runExec: LibraryExports["runExec"];
+export let saveSessionStore: LibraryExports["saveSessionStore"];
+export let waitForever: LibraryExports["waitForever"];
 
-export type {
-  ClaudeCliInfo,
-} from './claude-cli-resolver.js';
+async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
+  const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
+    import("./infra/gaxios-fetch-compat.js"),
+    import("./cli/run-main.js"),
+  ]);
+  return { installGaxiosFetchCompat, runCli };
+}
 
-// ── Gateway ──────────────────────────────────────────────────────────
-export {
-  startGateway,
-  isGatewayAlive,
-  isGatewayReady,
-} from './gateway.js';
+// Legacy direct file entrypoint only. Package root exports now live in library.ts.
+export async function runLegacyCliEntry(
+  argv: string[] = process.argv,
+  deps?: LegacyCliDeps,
+): Promise<void> {
+  const { installGaxiosFetchCompat, runCli } = deps ?? (await loadLegacyCliDeps());
+  await installGaxiosFetchCompat();
+  await runCli(argv);
+}
 
-export type {
-  GatewayOptions,
-  GatewayHandle,
-} from './gateway.js';
+const isMain = isMainModule({
+  currentFile: fileURLToPath(import.meta.url),
+});
 
-// ── Agent Execution ──────────────────────────────────────────────────
-export {
-  runAgent,
-} from './agent.js';
+if (!isMain) {
+  ({
+    applyTemplate,
+    createDefaultDeps,
+    deriveSessionKey,
+    describePortOwner,
+    ensureBinary,
+    ensurePortAvailable,
+    getReplyFromConfig,
+    handlePortError,
+    loadConfig,
+    loadSessionStore,
+    monitorWebChannel,
+    normalizeE164,
+    PortInUseError,
+    promptYesNo,
+    resolveSessionKey,
+    resolveStorePath,
+    runCommandWithTimeout,
+    runExec,
+    saveSessionStore,
+    waitForever,
+  } = await import("./library.js"));
+}
 
-export type {
-  AgentRunOptions,
-  AgentRunResult,
-} from './agent.js';
+if (isMain) {
+  const { restoreTerminalState } = await import("./terminal/restore.js");
 
-// ── OpenClaw re-exports (핵심 유틸리티) ──────────────────────────────
-// openclaw 패키지의 주요 API를 re-export하여 직접 접근 가능하게 함
-export {
-  loadConfig,
-  loadSessionStore,
-  saveSessionStore,
-  resolveStorePath,
-  deriveSessionKey,
-  resolveSessionKey,
-  createDefaultDeps,
-  waitForever,
-} from 'openclaw';
+  // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
+  // These log the error and exit gracefully instead of crashing without trace.
+  installUnhandledRejectionHandler();
+
+  process.on("uncaughtException", (error) => {
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+    process.exit(1);
+  });
+
+  void runLegacyCliEntry(process.argv).catch((err) => {
+    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+    process.exit(1);
+  });
+}

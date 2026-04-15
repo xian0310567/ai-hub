@@ -53,9 +53,8 @@ if (existsSync(targetTarball)) {
 }
 
 // standalone-openclaw is excluded from the root pnpm workspace and ships its
-// own lockfile. npm pack triggers its `prepack` script, which needs tsx +
-// other devDeps installed first. Auto-install if node_modules is missing so
-// fresh clones (CI, first-time dev) work without a separate bootstrap step.
+// own lockfile. Auto-install if node_modules is missing so fresh clones
+// (CI, first-time dev) work without a separate bootstrap step.
 if (!existsSync(join(packageRoot, "node_modules"))) {
   console.log(`[pack-openclaw] installing deps in ${packageRoot}`);
   // --ignore-workspace: standalone-openclaw is explicitly excluded from the
@@ -68,17 +67,27 @@ if (!existsSync(join(packageRoot, "node_modules"))) {
   );
 }
 
+// Build dist/ and dist/control-ui/ ourselves instead of letting `npm pack`'s
+// prepack script do it. The upstream `scripts/openclaw-prepack.ts` spawns
+// `pnpm.cmd` via spawnSync without `shell: true`, which trips Node's
+// CVE-2024-27980 guard on Windows (EINVAL), and its error handler silently
+// swallows the failure — the outer `npm pack` just exits 1 with no log.
+// Running the builds here via our shell-safe spawn avoids that, then we pack
+// with --ignore-scripts to skip the broken prepack entirely.
+console.log(`[pack-openclaw] building ${packageRoot} (pnpm build)`);
+execFileSync("pnpm", ["build"], { cwd: packageRoot, ...SPAWN_OPTS });
+console.log(`[pack-openclaw] building control UI (pnpm ui:build)`);
+execFileSync("pnpm", ["ui:build"], { cwd: packageRoot, ...SPAWN_OPTS });
+
 console.log(`[pack-openclaw] packing ${packageRoot}`);
-// Don't use --json: the prepack script's stdout bleeds into npm's output
-// and breaks JSON parsing. Just let npm drop the tarball in resourcesDir
-// and locate it by name afterward.
-// Quote --pack-destination value: with shell:true on Windows, paths can contain
-// characters that cmd.exe parses (though CI paths like D:\a\... are safe, it's
-// cheap insurance). Node's own arg quoting handles this, but being explicit.
-execFileSync("npm", ["pack", "--pack-destination", resourcesDir], {
-  cwd: packageRoot,
-  ...SPAWN_OPTS,
-});
+// --ignore-scripts: skip prepack/prepare/postpack. We've already prepared
+// dist/ and dist/control-ui/ above; running the prepack again would only
+// rebuild them (slow) or fail on Windows due to the upstream bug noted above.
+execFileSync(
+  "npm",
+  ["pack", "--ignore-scripts", "--pack-destination", resourcesDir],
+  { cwd: packageRoot, ...SPAWN_OPTS }
+);
 
 const packed = readdirSync(resourcesDir).find(
   (name) => name.startsWith("standalone-openclaw-") && name.endsWith(".tgz")

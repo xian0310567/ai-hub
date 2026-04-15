@@ -15,7 +15,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -242,10 +241,6 @@ pub fn summarize_openclaw_config() -> Result<BTreeMap<String, String>> {
     }
     Ok(summary)
 }
-
-#[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
-fn _platform_stub(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {

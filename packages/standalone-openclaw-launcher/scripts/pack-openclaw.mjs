@@ -17,6 +17,14 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// On Windows the npm/pnpm entrypoints ship as `.cmd` shims; Node's
+// execFileSync doesn't do PATHEXT resolution, so we need the extension
+// explicitly or spawn through cmd.exe. Appending `.cmd` is the simpler path
+// and avoids shell-escaping concerns entirely.
+const BIN_SUFFIX = process.platform === "win32" ? ".cmd" : "";
+const NPM = `npm${BIN_SUFFIX}`;
+const PNPM = `pnpm${BIN_SUFFIX}`;
+
 const here = dirname(fileURLToPath(import.meta.url));
 const launcherRoot = resolve(here, "..");
 const packageRoot = resolve(launcherRoot, "../standalone-openclaw");
@@ -55,7 +63,7 @@ if (!existsSync(join(packageRoot, "node_modules"))) {
   // root pnpm-workspace.yaml and owns its own pnpm-lock.yaml, so we install
   // it as a standalone project.
   execFileSync(
-    "pnpm",
+    PNPM,
     ["install", "--ignore-workspace", "--frozen-lockfile"],
     { cwd: packageRoot, stdio: "inherit" }
   );
@@ -65,7 +73,7 @@ console.log(`[pack-openclaw] packing ${packageRoot}`);
 // Don't use --json: the prepack script's stdout bleeds into npm's output
 // and breaks JSON parsing. Just let npm drop the tarball in resourcesDir
 // and locate it by name afterward.
-execFileSync("npm", ["pack", "--pack-destination", resourcesDir], {
+execFileSync(NPM, ["pack", "--pack-destination", resourcesDir], {
   cwd: packageRoot,
   stdio: "inherit",
 });

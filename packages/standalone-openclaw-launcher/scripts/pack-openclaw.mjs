@@ -17,13 +17,12 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// On Windows the npm/pnpm entrypoints ship as `.cmd` shims; Node's
-// execFileSync doesn't do PATHEXT resolution, so we need the extension
-// explicitly or spawn through cmd.exe. Appending `.cmd` is the simpler path
-// and avoids shell-escaping concerns entirely.
-const BIN_SUFFIX = process.platform === "win32" ? ".cmd" : "";
-const NPM = `npm${BIN_SUFFIX}`;
-const PNPM = `pnpm${BIN_SUFFIX}`;
+// On Windows, npm/pnpm ship as `.cmd` shims. Node 20+ refuses to execute
+// `.cmd`/`.bat` via execFileSync without `shell: true` (CVE-2024-27980
+// mitigation — EINVAL otherwise). Using shell:true on Windows routes through
+// cmd.exe which handles both PATHEXT resolution and the security check.
+const IS_WIN = process.platform === "win32";
+const SPAWN_OPTS = { stdio: "inherit", shell: IS_WIN };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const launcherRoot = resolve(here, "..");
@@ -63,9 +62,9 @@ if (!existsSync(join(packageRoot, "node_modules"))) {
   // root pnpm-workspace.yaml and owns its own pnpm-lock.yaml, so we install
   // it as a standalone project.
   execFileSync(
-    PNPM,
+    "pnpm",
     ["install", "--ignore-workspace", "--frozen-lockfile"],
-    { cwd: packageRoot, stdio: "inherit" }
+    { cwd: packageRoot, ...SPAWN_OPTS }
   );
 }
 
@@ -73,9 +72,12 @@ console.log(`[pack-openclaw] packing ${packageRoot}`);
 // Don't use --json: the prepack script's stdout bleeds into npm's output
 // and breaks JSON parsing. Just let npm drop the tarball in resourcesDir
 // and locate it by name afterward.
-execFileSync(NPM, ["pack", "--pack-destination", resourcesDir], {
+// Quote --pack-destination value: with shell:true on Windows, paths can contain
+// characters that cmd.exe parses (though CI paths like D:\a\... are safe, it's
+// cheap insurance). Node's own arg quoting handles this, but being explicit.
+execFileSync("npm", ["pack", "--pack-destination", resourcesDir], {
   cwd: packageRoot,
-  stdio: "inherit",
+  ...SPAWN_OPTS,
 });
 
 const packed = readdirSync(resourcesDir).find(

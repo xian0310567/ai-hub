@@ -272,7 +272,12 @@ impl Supervisor {
                         let _ = child.kill().await;
                         return Ok(SpawnOutcome::Shutdown);
                     }
-                    match *signal_rx.borrow() {
+                    // Copy out the signal so the `watch::Ref` guard (which is
+                    // `!Send`) is dropped before the `.await` calls below —
+                    // otherwise the enclosing future is non-`Send` and can't
+                    // be handed to `tauri::async_runtime::spawn`.
+                    let signal = *signal_rx.borrow();
+                    match signal {
                         Signal::Shutdown => {
                             let _ = child.kill().await;
                             let _ = child.wait().await;

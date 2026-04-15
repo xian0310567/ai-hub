@@ -1,0 +1,76 @@
+name: Launcher CI (PR validation)
+
+# Fast validation for the standalone-openclaw-launcher on every PR that touches
+# it. Uses `cargo check` + clippy instead of a full `tauri build` so compile
+# errors (E0502, E0373, etc.) are caught in minutes rather than during the
+# heavier release build on `main` / `staging`.
+
+on:
+  pull_request:
+    paths:
+      - "packages/standalone-openclaw-launcher/**"
+      - ".github/workflows/launcher-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: launcher-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust (stable) with clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/standalone-openclaw-launcher/src-tauri/target
+          key: cargo-check-${{ runner.os }}-${{ hashFiles('packages/standalone-openclaw-launcher/src-tauri/Cargo.toml') }}
+          restore-keys: |
+            cargo-check-${{ runner.os }}-
+            cargo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install
+
+      # Frontend must be buildable so tauri::generate_context!() can locate the
+      # distDir during `cargo check`.
+      - name: Build launcher frontend (vite)
+        working-directory: packages/standalone-openclaw-launcher
+        run: pnpm build:web
+
+      - name: TypeCheck launcher frontend
+        working-directory: packages/standalone-openclaw-launcher
+        run: pnpm typecheck
+
+      - name: Unit tests (wizard state machine)
+        working-directory: packages/standalone-openclaw-launcher
+        run: pnpm test
+
+      # `cargo check` catches borrow-checker / type errors (E0502, E0373, ...)
+      # without linking, so it's the fastest way to validate Rust on PRs.
+      - name: cargo check (src-tauri)
+        working-directory: packages/standalone-openclaw-launcher/src-tauri
+        run: cargo check --all-targets
+
+      # clippy is not failure-gated yet (existing deprecations emit warnings);
+      # once those are cleaned up, re-add `-- -D warnings`.
+      - name: cargo clippy
+        working-directory: packages/standalone-openclaw-launcher/src-tauri
+        run: cargo clippy --all-targets

@@ -8,7 +8,11 @@
 //    already exist. If yes, nothing to do.
 // 2. Download a pinned Node.js zip for the current OS+arch into a tmp file,
 //    then extract into `runtime\`.
-// 3. Run `npm.cmd install --prefix <deps> --no-fund --no-audit standalone-openclaw@<VERSION> @anthropic-ai/claude-code@latest`.
+// 3. Run `npm.cmd install --prefix <deps> --no-fund --no-audit <bundled standalone-openclaw tarball> @anthropic-ai/claude-code@latest`.
+//    The standalone-openclaw package isn't published to npm; we ship it as a
+//    Tauri resource (packed by `scripts/pack-openclaw.mjs`) and install from
+//    that local tarball. @anthropic-ai/claude-code still resolves from the
+//    public registry.
 // 4. Emit `launcher://bootstrap-progress` events so the wizard UI can show a
 //    step-by-step progress view.
 //
@@ -22,14 +26,15 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::paths;
 
-// Keep these pinned per launcher release. Bump alongside the launcher version.
+// Keep this pinned per launcher release. Bump alongside the launcher version.
 const NODE_VERSION: &str = "22.14.0";
-const STANDALONE_OPENCLAW_VERSION: &str = "2026.4.10";
 const CLAUDE_CODE_VERSION: &str = "latest";
+const BUNDLED_OPENCLAW_TARBALL: &str = "resources/standalone-openclaw.tgz";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BootstrapProgress {
@@ -207,6 +212,20 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
     let deps = paths::deps_dir()?;
     paths::ensure_dir(&deps)?;
 
+    // standalone-openclaw ships bundled with the installer as a tarball
+    // because it's not published to the public npm registry. Resolve its
+    // on-disk path so npm can install it as a local file spec.
+    let openclaw_tarball = handle
+        .path()
+        .resolve(BUNDLED_OPENCLAW_TARBALL, BaseDirectory::Resource)
+        .context("resolve bundled standalone-openclaw tarball")?;
+    if !openclaw_tarball.exists() {
+        bail!(
+            "bundled standalone-openclaw tarball missing at {}",
+            openclaw_tarball.display()
+        );
+    }
+
     emit(handle, "npm-install", "Running npm install (this may take a minute)", Some(60));
 
     let mut cmd = tokio::process::Command::new(&npm);
@@ -216,7 +235,7 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
         .arg("--no-fund")
         .arg("--no-audit")
         .arg("--omit=dev")
-        .arg(format!("standalone-openclaw@{STANDALONE_OPENCLAW_VERSION}"))
+        .arg(&openclaw_tarball)
         .arg(format!("@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"))
         .env("NODE_NO_WARNINGS", "1")
         .env("NPM_CONFIG_UPDATE_NOTIFIER", "false")

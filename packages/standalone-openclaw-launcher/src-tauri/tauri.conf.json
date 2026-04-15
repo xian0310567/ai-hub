@@ -59,7 +59,8 @@
       "resources/tray-running.png",
       "resources/tray-warn.png",
       "resources/tray-error.png",
-      "resources/tray-grey.png"
+      "resources/tray-grey.png",
+      "resources/standalone-openclaw.tgz"
     ],
     "shortDescription": "Tray launcher for Standalone OpenClaw",
     "longDescription": "Supervises the standalone-openclaw gateway on Windows, embeds the Control UI, manages the first-run wizard, and keeps the service running across reboots.",
@@ -70,7 +71,7 @@
         "language": ["en-US", "ko-KR"]
       },
       "nsis": {
-        "installMode": "perUser",
+        "installMode": "currentUser",
         "installerIcon": "icons/icon.ico"
       }
     }

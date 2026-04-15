@@ -6,13 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "dev:web": "vite",
+    "dev:web": "pnpm pack:openclaw && vite",
     "build": "tauri build",
-    "build:web": "vite build",
+    "build:web": "pnpm pack:openclaw && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pack:openclaw": "node scripts/pack-openclaw.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

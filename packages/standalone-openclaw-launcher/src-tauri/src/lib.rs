@@ -74,7 +74,7 @@ pub fn run() {
             commands::get_autostart,
             commands::quit_launcher,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Build tray before any async work so the icon shows up immediately.
             tray::build_tray(app.handle())?;
 

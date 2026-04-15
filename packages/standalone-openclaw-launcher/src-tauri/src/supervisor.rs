@@ -153,7 +153,12 @@ impl Supervisor {
         let mut restarts: u32 = 0;
 
         loop {
-            match *signal_rx.borrow() {
+            // Copy the current signal value out and drop the borrow before we
+            // touch `signal_rx` again — otherwise the Ref<'_, Signal> held by
+            // the match would overlap with the &mut self on `.changed().await`
+            // in the Pause arm.
+            let current = *signal_rx.borrow();
+            match current {
                 Signal::Shutdown => break,
                 Signal::Pause => {
                     self.set_state(&handle, GatewayState::Paused, None, None).await;
@@ -268,7 +273,11 @@ impl Supervisor {
                         let _ = child.kill().await;
                         return Ok(SpawnOutcome::Shutdown);
                     }
-                    match *signal_rx.borrow() {
+                    // Copy the signal out and drop the borrow before any
+                    // `.await` below — a live Ref<'_, Signal> across await
+                    // makes the future non-Send (RwLockReadGuard: !Send).
+                    let current = *signal_rx.borrow();
+                    match current {
                         Signal::Shutdown => {
                             let _ = child.kill().await;
                             let _ = child.wait().await;

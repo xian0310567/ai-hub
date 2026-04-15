@@ -153,7 +153,11 @@ impl Supervisor {
         let mut restarts: u32 = 0;
 
         loop {
-            match *signal_rx.borrow() {
+            // Copy the current signal into a local so the `watch::Ref` guard is
+            // dropped before we call `signal_rx.changed()` below (which needs a
+            // mutable borrow of `signal_rx`). `Signal` is `Copy`.
+            let current = *signal_rx.borrow();
+            match current {
                 Signal::Shutdown => break,
                 Signal::Pause => {
                     self.set_state(&handle, GatewayState::Paused, None, None).await;

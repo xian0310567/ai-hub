@@ -11,12 +11,13 @@ export async function workspaceRoutes(app: FastifyInstance) {
   app.post('/', async (req, reply) => {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
-    const { name, path, division_id } = req.body as { name: string; path: string; division_id?: string };
-    if (!name || !path) return reply.code(400).send({ error: 'name and path required' });
+    const { name, path: wsPath, division_id } = req.body as { name: string; path?: string; division_id?: string };
+    if (!name) return reply.code(400).send({ error: 'name required' });
+    const finalPath = wsPath || name.toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-');
 
     const id = newId();
     await exec('INSERT INTO workspaces(id,org_id,name,path,division_id) VALUES(?,?,?,?,?)',
-      [id, user.orgId, name, path, division_id ?? null]);
+      [id, user.orgId, name, finalPath, division_id ?? null]);
     return reply.code(201).send(await q1('SELECT * FROM workspaces WHERE id = ?', [id]));
   });
 
@@ -50,6 +51,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply);
     if (!requireRole(user, ['org_admin'], reply)) return;
     const { id } = req.body as { id: string };
+    const child = await q1('SELECT id FROM teams WHERE workspace_id = ? LIMIT 1', [id]);
+    if (child) {
+      reply.code(409);
+      return { ok: false, error: '하위 팀이 존재합니다. 먼저 하위 조직을 삭제해주세요.' };
+    }
     await exec('DELETE FROM workspaces WHERE id = ? AND org_id = ?', [id, user.orgId]);
     return { ok: true };
   });

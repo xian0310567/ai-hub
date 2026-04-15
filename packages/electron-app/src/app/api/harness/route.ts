@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSession, getVmSessionCookie } from '@/lib/auth';
+import { CLAUDE_CLI, CLAUDE_ENV, claudeSpawnError } from '@/lib/claude-cli';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -84,27 +85,45 @@ interface VmDivision  { id: string; name: string; ws_path: string }
 interface VmTeam      { id: string; name: string; workspace_id: string }
 interface VmAgent     { id: string; command_name?: string; org_level?: string; is_lead: number }
 
+/** 하네스 변경 후 OpenClaw 워크스페이스 동기화를 트리거한다 (비동기/백그라운드). */
+function triggerOpenClawSync(cookie: string): void {
+  vmPost('/api/openclaw/sync', cookie, {}).catch(() => {
+    // 동기화 실패는 무시 — 에이전트 생성 자체는 이미 성공
+  });
+}
+
 async function getWsPath(
   orgId: string,
   orgType: 'division' | 'department' | 'team',
   cookie: string,
 ): Promise<{ wsPath: string; workspaceId?: string } | null> {
+  const dataDir = process.env.DATA_DIR || path.join(process.cwd(), '.data');
+  const fallback = (id: string) => {
+    const p = path.join(dataDir, 'workspaces', id);
+    fs.mkdirSync(p, { recursive: true });
+    return p;
+  };
+
+  const ensureDir = (p: string) => { fs.mkdirSync(p, { recursive: true }); return p; };
+
   if (orgType === 'division') {
     const div = await vmGet<VmDivision>(`/api/divisions/${orgId}`, cookie);
-    if (!div?.ws_path) return null;
-    return { wsPath: div.ws_path };
+    if (!div) return null;
+    const wsPath = ensureDir(div.ws_path?.trim() || fallback(orgId));
+    return { wsPath };
   }
   if (orgType === 'department') {
     const ws = await vmGet<VmWorkspace>(`/api/workspaces/${orgId}`, cookie);
-    if (!ws?.path) return null;
-    return { wsPath: ws.path, workspaceId: ws.id };
+    if (!ws) return null;
+    const wsPath = ensureDir(ws.path?.trim() || fallback(orgId));
+    return { wsPath, workspaceId: ws.id };
   }
   // team
   const team = await vmGet<VmTeam>(`/api/teams/${orgId}`, cookie);
   if (!team) return null;
   const ws = await vmGet<VmWorkspace>(`/api/workspaces/${team.workspace_id}`, cookie);
-  if (!ws?.path) return null;
-  return { wsPath: ws.path, workspaceId: ws.id };
+  const wsPath = ensureDir(ws?.path?.trim() || fallback(orgId));
+  return { wsPath, workspaceId: ws?.id ?? team.workspace_id };
 }
 
 // ── POST /api/harness — 설계 요청 ────────────────────────────────────
@@ -122,7 +141,7 @@ export async function POST(req: NextRequest) {
 
   const cookie = getVmSessionCookie(req);
   const loc = await getWsPath(org_id, org_type, cookie);
-  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  if (!loc) return Response.json({ ok: false, error: `조직을 찾을 수 없습니다 (id: ${org_id})` }, { status: 404 });
   const { wsPath } = loc;
 
   // ── 부문/실: 리더 역할 정의 ──
@@ -156,14 +175,14 @@ ${task}
 - 한국어로 작성`;
 
     try {
-      const result = execFileSync('claude', ['-p', prompt], {
-        cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
+      const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
+        cwd: wsPath, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV,
       });
       const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
       const design = JSON.parse(cleaned);
       return Response.json({ ok: true, design, mode: 'leader' });
     } catch (e: any) {
-      return Response.json({ ok: false, error: `설계 실패: ${e.message}` }, { status: 500 });
+      return Response.json({ ok: false, error: `설계 실패: ${claudeSpawnError(e)}` }, { status: 500 });
     }
   }
 
@@ -208,14 +227,14 @@ ${task}
 - 한국어 이름 사용`;
 
   try {
-    const result = execFileSync('claude', ['-p', prompt], {
-      cwd: wsPath, encoding: 'utf8', timeout: 90000, env: { ...process.env },
+    const result = execFileSync(CLAUDE_CLI, ['-p', prompt], {
+      cwd: wsPath, encoding: 'utf8', timeout: 90000, env: CLAUDE_ENV,
     });
     const cleaned = result.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
     const design = JSON.parse(cleaned);
     return Response.json({ ok: true, design, mode: 'team' });
   } catch (e: any) {
-    return Response.json({ ok: false, error: `설계 실패: ${e.message}` }, { status: 500 });
+    return Response.json({ ok: false, error: `설계 실패: ${claudeSpawnError(e)}` }, { status: 500 });
   }
 }
 
@@ -235,7 +254,7 @@ export async function PATCH(req: NextRequest) {
 
   const cookie = getVmSessionCookie(req);
   const loc = await getWsPath(org_id, org_type, cookie);
-  if (!loc) return Response.json({ ok: false, error: '조직을 찾을 수 없습니다' }, { status: 404 });
+  if (!loc) return Response.json({ ok: false, error: `조직을 찾을 수 없습니다 (id: ${org_id})` }, { status: 404 });
   const { wsPath, workspaceId } = loc;
 
   // ── 부문/실: 리더 1명만 생성/업데이트 ──
@@ -272,6 +291,9 @@ export async function PATCH(req: NextRequest) {
       const patchEp = org_type === 'division' ? '/api/divisions' : '/api/workspaces';
       await vmPatch(patchEp, cookie, { id: org_id, harness_prompt: task });
     }
+
+    // OpenClaw 워크스페이스 동기화 (백그라운드)
+    triggerOpenClawSync(cookie);
 
     return Response.json({ ok: true, created: [name] });
   }
@@ -333,8 +355,8 @@ export async function PATCH(req: NextRequest) {
 ${soul}
 
 개선된 SOUL.md만 출력 (## 정체성, ## 핵심 역할, ## 업무 처리 원칙, ## 협업 방식, ## 보고 형식 섹션 포함):`;
-          const improved = execFileSync('claude', ['-p', improvePrompt], {
-            cwd: wsPath, encoding: 'utf8', timeout: 60000, env: { ...process.env },
+          const improved = execFileSync(CLAUDE_CLI, ['-p', improvePrompt], {
+            cwd: wsPath, encoding: 'utf8', timeout: 60000, env: CLAUDE_ENV,
           }).trim();
           if (improved && improved.length > 50) {
             vmPatch('/api/agents', cookie, { id: agentId, soul: improved });
@@ -351,6 +373,9 @@ ${soul}
 
   // harness_prompt 저장
   if (task) await vmPatch('/api/teams', cookie, { id: org_id, harness_prompt: task });
+
+  // OpenClaw 워크스페이스 동기화 (백그라운드)
+  triggerOpenClawSync(cookie);
 
   return Response.json({ ok: true, created });
 }

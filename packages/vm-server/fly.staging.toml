@@ -1,0 +1,37 @@
+app = "ai-hub-vm-server-staging"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile.staging"
+
+[env]
+  NODE_ENV = "staging"
+  PORT = "4000"
+  HOST = "0.0.0.0"
+  DATA_DIR = "/data"
+  POSTGRES_USER = "aihub"
+  POSTGRES_DB = "aihub_staging"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[mounts]
+  source = "vm_data_staging"
+  destination = "/data"
+
+[checks]
+  [checks.health]
+    type = "http"
+    port = 4000
+    path = "/health"
+    interval = "30s"
+    timeout = "10s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

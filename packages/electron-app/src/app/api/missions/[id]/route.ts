@@ -4,21 +4,38 @@ import { getSession } from '@/lib/auth';
 
 // GET /api/missions/[id] — 미션 상세 조회
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getSession(req);
-  if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  try {
+    const user = await getSession(req);
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
-  const { id } = await params;
-  const mission = Missions.get(id);
-  if (!mission || mission.user_id !== user.id) {
-    return Response.json({ ok: false, error: '미션 없음' }, { status: 404 });
+    const { id } = await params;
+    const mission = Missions.get(id);
+    if (!mission || mission.user_id !== user.id) {
+      return Response.json({ ok: false, error: '미션 없음' }, { status: 404 });
+    }
+
+    const stepsRaw = mission.steps || '[]';
+    let steps: any[] = [];
+    let summary: string | undefined;
+    let routingMeta: any;
+    try {
+      const parsed = JSON.parse(stepsRaw);
+      if (Array.isArray(parsed)) { steps = parsed; }
+      else { steps = []; summary = parsed?.summary; routingMeta = parsed; }
+    } catch {}
+
+    return Response.json({
+      ok: true,
+      mission: {
+        ...mission,
+        routing: JSON.parse(mission.routing || '[]'),
+        steps,
+        summary,
+        routingMeta,
+      },
+    });
+  } catch (err) {
+    console.error('[GET /api/missions/:id] 오류:', err instanceof Error ? err.message : err);
+    return Response.json({ ok: false, error: '미션 조회 실패' }, { status: 500 });
   }
-
-  return Response.json({
-    ok: true,
-    mission: {
-      ...mission,
-      routing: JSON.parse(mission.routing || '[]'),
-      steps: JSON.parse(mission.steps || '[]'),
-    },
-  });
 }

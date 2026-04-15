@@ -395,7 +395,7 @@ export default function LivePage() {
 
         {/* 헤더 */}
         <div style={{
-          height: 44, display: 'flex', alignItems: 'center', gap: 12,
+          height: 54, display: 'flex', alignItems: 'center', gap: 12,
           padding: '0 20px', borderBottom: '1px solid var(--border)',
           background: 'var(--bg-panel)', flexShrink: 0,
         }}>

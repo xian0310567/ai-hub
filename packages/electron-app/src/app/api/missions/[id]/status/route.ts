@@ -16,6 +16,7 @@ interface Progress {
   completed: number;
   running: number;
   pending: number;
+  percentage: number;
 }
 
 // GET /api/missions/[id]/status — 미션 진행 상태 조회
@@ -36,10 +37,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return Response.json({ ok: false, error: '권한이 없습니다' }, { status: 403 });
   }
 
-  // steps 파싱
+  // steps 파싱 — routing 메타 객체(object)와 실행 Step[] 배열 모두 처리
   let steps: Step[] = [];
   try {
-    steps = JSON.parse(mission.steps || '[]');
+    const parsed = JSON.parse(mission.steps || '[]');
+    steps = Array.isArray(parsed) ? parsed : [];
   } catch {
     steps = [];
   }
@@ -67,11 +69,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   });
 
   // progress 계산
+  const completed = steps.filter(s => s.status === 'done').length;
   const progress: Progress = {
     total: steps.length,
-    completed: steps.filter(s => s.status === 'done').length,
+    completed,
     running: steps.filter(s => s.status === 'running').length,
     pending: steps.filter(s => s.status === 'queued' || s.status === 'waiting').length,
+    percentage: steps.length > 0 ? Math.round((completed / steps.length) * 100) : 0,
   };
 
   return Response.json({
@@ -80,6 +84,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       id: mission.id,
       task: mission.task,
       status: mission.status,
+      error: mission.error || undefined,
+      final_doc: mission.final_doc || undefined,
       steps,
       progress,
     },

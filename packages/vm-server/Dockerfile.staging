@@ -1,0 +1,22 @@
+FROM node:22-alpine
+
+# PostgreSQL 서버 + 클라이언트(pg_dump)
+RUN apk add --no-cache postgresql16 postgresql16-client
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+COPY fly-entrypoint.sh /app/fly-entrypoint.sh
+RUN chmod +x /app/fly-entrypoint.sh
+
+RUN mkdir -p /data && chown postgres:postgres /data
+
+EXPOSE 4000
+
+CMD ["/app/fly-entrypoint.sh"]

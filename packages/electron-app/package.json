@@ -9,19 +9,26 @@
     "build": "next build && electron-builder build",
     "start": "NODE_ENV=production next start",
     "electron:dev": "electron .",
+    "typecheck": "tsc --noEmit",
+    "preflight": "tsc --noEmit && next build --dry-run || next build",
     "test": "vitest run",
     "test:watch": "vitest",
     "vault:add": "node scripts/vault-add.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
+    "better-sqlite3": "^12.8.0",
+    "cron-parser": "^4.9.0",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -42,6 +49,20 @@
       ".next/**/*",
       "public/**/*",
       "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "openclaw-bundle",
+        "to": "openclaw",
+        "filter": [
+          "**/*",
+          "!**/*.map",
+          "!**/*.tsbuildinfo",
+          "!**/test/**",
+          "!**/tests/**",
+          "!**/__tests__/**"
+        ]
+      }
     ],
     "mac": {
       "target": "dmg",

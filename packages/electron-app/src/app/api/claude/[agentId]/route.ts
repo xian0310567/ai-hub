@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawn, execSync } from 'child_process';
+import { CLAUDE_CLI, CLAUDE_ENV, claudeSpawnError } from '@/lib/claude-cli';
 import { ChatLogs } from '@/lib/db';
 import { randomUUID } from 'crypto';
 import { getSession, getVmSessionCookie, getUserSessionsDir } from '@/lib/auth';
@@ -68,7 +69,7 @@ function stripAnsi(s: string) {
 }
 
 function isClaudeAvailable(): boolean {
-  try { execSync('claude --version', { stdio: 'ignore', timeout: 3000 }); return true; } catch { return false; }
+  try { execSync(`${CLAUDE_CLI} --version`, { stdio: 'ignore', timeout: 3000 }); return true; } catch { return false; }
 }
 
 function runClaude(
@@ -96,8 +97,8 @@ function runClaude(
       const proc  = isWin
         ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
             `claude ${args.map(a => `"${a.replace(/"/g, '""')}"`).join(' ')}`
-          ], { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] })
-        : spawn('claude', args, { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+          ], { cwd, env: CLAUDE_ENV, stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawn(CLAUDE_CLI, args, { cwd, env: CLAUDE_ENV, stdio: ['ignore', 'pipe', 'pipe'] });
 
       proc.stdout.setEncoding('utf8');
       let buf = ''; let full = '';
@@ -125,9 +126,7 @@ function runClaude(
 
       proc.on('error', (e) => {
         controller.enqueue(encoder.encode(
-          `[claude CLI 오류: ${e.message}]\n\n` +
-          `claude가 설치되어 있지 않거나 로그인이 필요합니다.\n` +
-          `터미널에서 'claude login'을 실행해주세요.`
+          `[claude CLI 오류] ${claudeSpawnError(e)}`
         ));
         try { controller.close(); } catch {}
       });

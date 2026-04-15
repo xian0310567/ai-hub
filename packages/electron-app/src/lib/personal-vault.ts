@@ -27,7 +27,10 @@ let _keytar: Keytar | null | undefined; // undefined = 미초기화
 async function getKeytar(): Promise<Keytar | null> {
   if (_keytar !== undefined) return _keytar;
   try {
-    const mod = await import('keytar');
+    // keytar는 optional 네이티브 모듈 — 미설치 시 파일 폴백 사용
+    // webpack/turbopack 정적 분석을 우회하여 번들 경고 방지
+    const moduleName = 'keytar';
+    const mod = await (Function('m', 'return import(m)')(moduleName) as Promise<any>);
     _keytar = (mod.default ?? mod) as unknown as Keytar;
     return _keytar;
   } catch {

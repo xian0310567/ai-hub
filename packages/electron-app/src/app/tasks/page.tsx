@@ -29,7 +29,8 @@ export default function TasksPage() {
       fetch('/api/tasks').then(r=>r.json()),
       fetch('/api/agents').then(r=>r.json()),
     ]);
-    if (tr.ok) setTasks(tr.tasks);
+    if (Array.isArray(tr)) setTasks(tr);
+    else if (tr.ok) setTasks(tr.tasks);
     if (ar.ok) setAgents(ar.agents.filter((a:Agent)=>a.is_lead));
   }, []);
 
@@ -82,7 +83,7 @@ export default function TasksPage() {
   return (
     <div style={{minHeight:'100vh',background:'var(--bg-canvas)'}}>
       {/* 헤더 */}
-      <div style={{height:44,display:'flex',alignItems:'center',gap:12,padding:'0 24px',borderBottom:'1px solid var(--border)',background:'var(--bg-panel)',position:'sticky',top:0,zIndex:100}}>
+      <div style={{height:54,display:'flex',alignItems:'center',gap:12,padding:'0 24px',borderBottom:'1px solid var(--border)',background:'var(--bg-panel)',position:'sticky',top:0,zIndex:100}}>
         <a href="/" style={{fontSize:12,fontWeight:500,color:'var(--text-muted)',textDecoration:'none'}} onMouseOver={e=>e.currentTarget.style.color='var(--text-primary)'} onMouseOut={e=>e.currentTarget.style.color='var(--text-muted)'}>← 대시보드</a>
         <span style={{color:'var(--border)'}}>|</span>
         <span style={{fontSize:14,fontWeight:700,color:'var(--text-primary)'}}>태스크</span>
@@ -207,7 +208,7 @@ function AddTaskModal({ agents, onClose, onDone }: { agents:Agent[]; onClose:()=
       const r = await fetch('/api/tasks', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ title, description: desc, agent_id: agentId||null, agent_name: agent?.name||null }) });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error);
+      if (!d.ok && !d.id) throw new Error(d.error || '생성 실패');
       onDone();
     } catch(e:any) { setErr(e.message||'오류'); }
     setLoading(false);

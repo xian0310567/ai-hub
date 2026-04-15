@@ -22,17 +22,18 @@ export async function initSchema(): Promise<void> {
       created_at    BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
     )`,
 
-    `CREATE TABLE IF NOT EXISTS sessions (
-      id         TEXT PRIMARY KEY,
-      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at BIGINT NOT NULL,
-      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
-    )`,
-
     `CREATE TABLE IF NOT EXISTS organizations (
       id         TEXT PRIMARY KEY,
       name       TEXT NOT NULL,
       slug       TEXT UNIQUE NOT NULL,
+      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS sessions (
+      id         TEXT PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      org_id     TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+      expires_at BIGINT NOT NULL,
       created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
     )`,
 
@@ -214,6 +215,7 @@ export async function initSchema(): Promise<void> {
     `CREATE TABLE IF NOT EXISTS schedules (
       id           TEXT PRIMARY KEY,
       org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
       workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
       name         TEXT NOT NULL,
       cron_expr    TEXT NOT NULL,
@@ -260,11 +262,37 @@ export async function initSchema(): Promise<void> {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`,
+
+    // ── OpenClaw 채널 설정 ────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS openclaw_channels (
+      id              TEXT PRIMARY KEY,
+      org_id          TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      channel_type    TEXT NOT NULL,
+      config          TEXT NOT NULL DEFAULT '{}',
+      enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+      target_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      created_at      BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+      UNIQUE(org_id, channel_type)
+    )`,
+
+    // ── OpenClaw 워크스페이스 설정 (DB 기반 동적 생성) ──────────────────
+    `CREATE TABLE IF NOT EXISTS openclaw_configs (
+      id           TEXT PRIMARY KEY,
+      org_id       TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      config       TEXT NOT NULL DEFAULT '{}',
+      runtime_dir  TEXT NOT NULL DEFAULT '',
+      version      INTEGER NOT NULL DEFAULT 1,
+      updated_at   BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+      UNIQUE(org_id)
+    )`,
   ];
 
   for (const ddl of tables) {
     await pool.query(ddl);
   }
+
+  // 마이그레이션: schedules에 user_id 추가
+  await pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`);
 
   // 서버 재시작 시 running/assigned 상태 작업 정리
   await pool.query(`UPDATE tasks SET status = 'failed' WHERE status IN ('running', 'assigned')`);

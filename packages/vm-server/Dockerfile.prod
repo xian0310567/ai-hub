@@ -1,0 +1,31 @@
+# ── Build ────────────────────────────────────────────────────────────
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+COPY package.json tsconfig.json ./
+RUN npm install
+
+COPY src ./src
+RUN npm run build && npm prune --production
+
+# ── Runtime ──────────────────────────────────────────────────────────
+FROM node:22-alpine
+WORKDIR /app
+
+# PostgreSQL 서버 + 클라이언트(pg_dump)
+RUN apk add --no-cache postgresql16 postgresql16-client
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+COPY fly-entrypoint.sh /app/fly-entrypoint.sh
+RUN chmod +x /app/fly-entrypoint.sh
+
+RUN mkdir -p /data && chown postgres:postgres /data
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
+  CMD wget -qO- http://localhost:4000/health || exit 1
+
+CMD ["/app/fly-entrypoint.sh"]

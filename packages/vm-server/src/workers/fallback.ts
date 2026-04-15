@@ -4,7 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getPool, exec, now } from '../db/pool.js';
+import { getPool, exec, newId, now } from '../db/pool.js';
 
 const POLL_INTERVAL_MS = Number(process.env.FALLBACK_POLL_MS) || 5_000;
 const FALLBACK_HOST_ID = 'fallback-daemon';
@@ -13,6 +13,7 @@ const DEFAULT_MODEL = 'claude-sonnet-4-6';
 type TaskRow = {
   id: string;
   org_id: string;
+  triggered_by: string | null;
   title: string;
   description: string;
   agent_name: string | null;
@@ -30,7 +31,7 @@ async function claimTask(): Promise<TaskRow | undefined> {
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, org_id, title, description, agent_name
+    RETURNING id, org_id, triggered_by, title, description, agent_name
   `, [FALLBACK_HOST_ID]);
   return result.rows[0];
 }
@@ -55,10 +56,25 @@ async function runTask(client: Anthropic, task: TaskRow): Promise<void> {
     await exec('UPDATE tasks SET status = $1, result = $2, finished_at = $3 WHERE id = $4',
       ['completed', text, now(), task.id]);
 
+    if (task.triggered_by) {
+      await exec(
+        `INSERT INTO notifications(id, user_id, org_id, type, title, message) VALUES($1,$2,$3,$4,$5,$6)`,
+        [newId(), task.triggered_by, task.org_id, 'info', `스케줄 완료: ${task.title}`, text.slice(0, 500)],
+      );
+    }
+
     console.log(`[fallback-daemon] task ${task.id} completed`);
   } catch (err) {
     await exec('UPDATE tasks SET status = $1, result = $2, finished_at = $3 WHERE id = $4',
       ['failed', String(err), now(), task.id]);
+
+    if (task.triggered_by) {
+      await exec(
+        `INSERT INTO notifications(id, user_id, org_id, type, title, message) VALUES($1,$2,$3,$4,$5,$6)`,
+        [newId(), task.triggered_by, task.org_id, 'warning', `스케줄 실패: ${task.title}`, String(err).slice(0, 500)],
+      );
+    }
+
     console.error(`[fallback-daemon] task ${task.id} failed:`, err);
   }
 }

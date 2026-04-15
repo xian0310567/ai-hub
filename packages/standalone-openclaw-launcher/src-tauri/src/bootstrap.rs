@@ -1,0 +1,254 @@
+// src-tauri/src/bootstrap.rs
+//
+// First-run bootstrap of the runtime layout described in `paths.rs`.
+//
+// Flow:
+//
+// 1. Check whether `runtime\node.exe` + `deps\node_modules\standalone-openclaw\openclaw.mjs`
+//    already exist. If yes, nothing to do.
+// 2. Download a pinned Node.js zip for the current OS+arch into a tmp file,
+//    then extract into `runtime\`.
+// 3. Run `npm.cmd install --prefix <deps> --no-fund --no-audit standalone-openclaw@<VERSION> @anthropic-ai/claude-code@latest`.
+// 4. Emit `launcher://bootstrap-progress` events so the wizard UI can show a
+//    step-by-step progress view.
+//
+// Network operations use `reqwest` with rustls and streaming to a tempfile so
+// large zips don't sit in memory. We deliberately keep the bootstrap logic
+// small and synchronous-friendly: if anything goes wrong, the user sees the
+// error and can retry from the wizard.
+
+use std::fs;
+use std::path::Path;
+
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
+use crate::paths;
+
+// Keep these pinned per launcher release. Bump alongside the launcher version.
+const NODE_VERSION: &str = "22.14.0";
+const STANDALONE_OPENCLAW_VERSION: &str = "2026.4.10";
+const CLAUDE_CODE_VERSION: &str = "latest";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BootstrapProgress {
+    pub step: &'static str,
+    pub message: String,
+    pub percent: Option<u8>,
+}
+
+pub fn needs_bootstrap() -> Result<bool> {
+    Ok(!paths::node_exe()?.exists() || !paths::openclaw_entry()?.exists())
+}
+
+pub async fn run_bootstrap(handle: &AppHandle) -> Result<()> {
+    paths::ensure_layout()?;
+
+    emit(handle, "starting", "Preparing runtime directories", Some(5));
+
+    if !paths::node_exe()?.exists() {
+        emit(handle, "node-download", "Downloading portable Node.js", Some(15));
+        download_and_extract_node(handle).await?;
+    } else {
+        emit(handle, "node-skip", "Portable Node.js already present", Some(35));
+    }
+
+    emit(handle, "npm-install", "Installing standalone-openclaw + claude-code", Some(55));
+    npm_install(handle).await?;
+
+    emit(handle, "done", "Bootstrap complete", Some(100));
+    Ok(())
+}
+
+fn emit(handle: &AppHandle, step: &'static str, message: impl Into<String>, percent: Option<u8>) {
+    let payload = BootstrapProgress {
+        step,
+        message: message.into(),
+        percent,
+    };
+    if let Err(err) = handle.emit("launcher://bootstrap-progress", payload) {
+        tracing::warn!(?err, "failed to emit bootstrap progress");
+    }
+}
+
+async fn download_and_extract_node(handle: &AppHandle) -> Result<()> {
+    let url = node_download_url()?;
+    tracing::info!(url = %url, "downloading Node.js runtime");
+
+    let response = reqwest::Client::builder()
+        .user_agent("standalone-openclaw-launcher")
+        .build()?
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("download {url}"))?;
+
+    if !response.status().is_success() {
+        bail!("node download failed: HTTP {}", response.status());
+    }
+
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let tmp_path = paths::runtime_dir()?.join("node-download.tmp");
+    let mut file = tokio::fs::File::create(&tmp_path).await?;
+
+    let mut stream = response.bytes_stream();
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.context("read node zip chunk")?;
+        downloaded += bytes.len() as u64;
+        file.write_all(&bytes).await?;
+        if total > 0 {
+            let pct = ((downloaded as f64 / total as f64) * 25.0) as u8 + 15;
+            emit(handle, "node-download", "Downloading portable Node.js", Some(pct.min(40)));
+        }
+    }
+    file.flush().await?;
+    drop(file);
+
+    emit(handle, "node-extract", "Extracting portable Node.js", Some(45));
+    extract_node_zip(&tmp_path, &paths::runtime_dir()?)?;
+    fs::remove_file(&tmp_path).ok();
+    Ok(())
+}
+
+fn node_download_url() -> Result<String> {
+    // Pinned archive name patterns mirror https://nodejs.org/dist/.
+    let (os, arch, ext) = if cfg!(target_os = "windows") {
+        (
+            "win",
+            if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            },
+            "zip",
+        )
+    } else if cfg!(target_os = "macos") {
+        (
+            "darwin",
+            if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            },
+            "tar.gz",
+        )
+    } else if cfg!(target_os = "linux") {
+        (
+            "linux",
+            if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            },
+            "tar.xz",
+        )
+    } else {
+        bail!("unsupported platform for bootstrap");
+    };
+    Ok(format!(
+        "https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-{os}-{arch}.{ext}"
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn extract_node_zip(zip_path: &Path, runtime_dir: &Path) -> Result<()> {
+    let file = fs::File::open(zip_path).context("open node zip")?;
+    let mut archive = zip::ZipArchive::new(file).context("read node zip")?;
+
+    // The archive contains a top-level dir `node-v<ver>-win-x64/`. We flatten
+    // it so `runtime\node.exe` lands at the expected location.
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let Some(enclosed) = entry.enclosed_name() else {
+            continue;
+        };
+        let Some(stripped) = enclosed
+            .components()
+            .skip(1)
+            .collect::<std::path::PathBuf>()
+            .to_str()
+            .map(String::from)
+        else {
+            continue;
+        };
+        if stripped.is_empty() {
+            continue;
+        }
+        let out_path = runtime_dir.join(&stripped);
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut out = fs::File::create(&out_path)
+            .with_context(|| format!("create {}", out_path.display()))?;
+        std::io::copy(&mut entry, &mut out)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn extract_node_zip(_zip_path: &Path, _runtime_dir: &Path) -> Result<()> {
+    // On non-Windows hosts we accept that bootstrap is a no-op: the end user
+    // is expected to supply their own Node. Development/test runs on Linux
+    // simply expect `runtime/bin/node` to be a symlink to a system Node.
+    bail!("automatic Node bootstrap is Windows-only; install Node manually for this platform")
+}
+
+async fn npm_install(handle: &AppHandle) -> Result<()> {
+    let npm = paths::npm_cmd()?;
+    let deps = paths::deps_dir()?;
+    paths::ensure_dir(&deps)?;
+
+    emit(handle, "npm-install", "Running npm install (this may take a minute)", Some(60));
+
+    let mut cmd = tokio::process::Command::new(&npm);
+    cmd.arg("install")
+        .arg("--prefix")
+        .arg(&deps)
+        .arg("--no-fund")
+        .arg("--no-audit")
+        .arg("--omit=dev")
+        .arg(format!("standalone-openclaw@{STANDALONE_OPENCLAW_VERSION}"))
+        .arg(format!("@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"))
+        .env("NODE_NO_WARNINGS", "1")
+        .env("NPM_CONFIG_UPDATE_NOTIFIER", "false")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .await
+        .with_context(|| format!("spawn {}", npm.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("npm install failed: {stderr}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_url_targets_current_platform() {
+        let url = node_download_url().expect("platform supported");
+        assert!(url.starts_with("https://nodejs.org/dist/v"));
+        assert!(url.contains(NODE_VERSION));
+    }
+}

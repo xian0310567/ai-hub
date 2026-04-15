@@ -7,6 +7,15 @@
       "env": { "PATH": "/Users/zesty/.nvm/versions/node/v22.16.0/bin:/usr/local/bin:/usr/bin:/bin" },
       "runtimeArgs": ["node_modules/.bin/tsx", "server.ts"],
       "port": 3001
+    },
+    {
+      "name": "electron-app",
+      "runtimeExecutable": "/Users/zesty/.nvm/versions/node/v22.16.0/bin/node",
+      "env": { "PATH": "/Users/zesty/.nvm/versions/node/v22.16.0/bin:/usr/local/bin:/usr/bin:/bin" },
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "dev"],
+      "cwd": "packages/electron-app",
+      "port": 3000,
+      "autoPort": false
     }
   ],
   "autoVerify": false

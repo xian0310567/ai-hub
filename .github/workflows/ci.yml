@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [staging, main]
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: TypeCheck electron-app
+        working-directory: packages/electron-app
+        run: npx tsc --noEmit
+
+      - name: TypeCheck vm-server
+        working-directory: packages/vm-server
+        run: npx tsc --noEmit
+
+  detect-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 배포 대상 서비스 감지
+        id: detect
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          SERVICES=""
+          if git diff --name-only "$BASE" "$HEAD" | grep -q '^packages/vm-server/'; then
+            SERVICES="${SERVICES}🖥️ **vm-server** → Fly.io (staging/prod)\n"
+          fi
+          if git diff --name-only "$BASE" "$HEAD" | grep -q -E '^packages/(electron-app|openclaw)/'; then
+            SERVICES="${SERVICES}💻 **electron-app** → GitHub Release\n"
+          fi
+          if git diff --name-only "$BASE" "$HEAD" | grep -q '^\.github/workflows/fly-deploy'; then
+            SERVICES="${SERVICES}⚙️ **fly-deploy workflow** 변경\n"
+          fi
+          if git diff --name-only "$BASE" "$HEAD" | grep -q '^\.github/workflows/electron-build'; then
+            SERVICES="${SERVICES}⚙️ **electron-build workflow** 변경\n"
+          fi
+
+          if [ -z "$SERVICES" ]; then
+            SERVICES="배포 대상 없음 (코드/설정 변경만)"
+          fi
+
+          echo "services<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$SERVICES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: PR에 배포 정보 코멘트
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const services = `${{ steps.detect.outputs.services }}`;
+            const body = `## 🚀 배포 영향 범위\n\n${services}\n\n> 이 코멘트는 CI가 자동 생성합니다.`;
+
+            // 기존 코멘트 업데이트 또는 새로 생성
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('배포 영향 범위')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

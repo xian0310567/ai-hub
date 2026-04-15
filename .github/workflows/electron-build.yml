@@ -1,0 +1,140 @@
+name: Build Electron App
+
+on:
+  push:
+    branches: [staging, main]
+    paths:
+      - "packages/electron-app/**"
+      - "packages/openclaw/**"
+      - ".github/workflows/electron-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: macos-latest
+            platform: mac
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: packages/electron-app/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('packages/electron-app/pnpm-lock.yaml', 'packages/electron-app/package.json') }}-${{ hashFiles('packages/electron-app/src/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('packages/electron-app/pnpm-lock.yaml', 'packages/electron-app/package.json') }}-
+            nextjs-${{ runner.os }}-
+
+      # ── OpenClaw 빌드 ──────────────────────────────────────────────
+      - name: Build openclaw
+        run: pnpm --filter openclaw build
+
+      - name: Prepare openclaw bundle
+        shell: bash
+        run: |
+          BUNDLE="packages/electron-app/openclaw-bundle"
+          rm -rf "$BUNDLE"
+          mkdir -p "$BUNDLE"
+
+          cp packages/openclaw/openclaw.mjs "$BUNDLE/"
+          cp packages/openclaw/package.json "$BUNDLE/"
+          cp -r packages/openclaw/dist "$BUNDLE/dist"
+
+          [ -d packages/openclaw/skills ] && cp -r packages/openclaw/skills "$BUNDLE/skills"
+          [ -d packages/openclaw/assets ] && cp -r packages/openclaw/assets "$BUNDLE/assets"
+
+          cd "$BUNDLE"
+          npm install --omit=dev --ignore-scripts
+
+      # ── Preflight 체크 (타입 에러 조기 발견) ────────────────────────
+      - name: TypeCheck
+        working-directory: packages/electron-app
+        run: npx tsc --noEmit
+
+      # ── Electron 빌드 ──────────────────────────────────────────────
+      - name: Build Next.js
+        working-directory: packages/electron-app
+        env:
+          VM_SERVER_URL: ${{ github.ref == 'refs/heads/main' && 'https://ai-hub-vm-server.fly.dev' || 'https://ai-hub-vm-server-staging.fly.dev' }}
+        run: npx next build
+
+      - name: Build Electron (${{ matrix.platform }}-${{ matrix.arch }})
+        working-directory: packages/electron-app
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        shell: bash
+        run: |
+          [ -z "$CSC_LINK" ] && unset CSC_LINK
+          [ -z "$CSC_KEY_PASSWORD" ] && unset CSC_KEY_PASSWORD
+          [ -z "$WIN_CSC_LINK" ] && unset WIN_CSC_LINK
+          [ -z "$WIN_CSC_KEY_PASSWORD" ] && unset WIN_CSC_KEY_PASSWORD
+          npx electron-builder build --${{ matrix.platform }} --${{ matrix.arch }}
+
+      # ── 아티팩트 업로드 ────────────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Hub-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            packages/electron-app/dist/*.dmg
+            packages/electron-app/dist/*.zip
+            packages/electron-app/dist/*.exe
+            packages/electron-app/dist/*.AppImage
+          if-no-files-found: error
+
+  # ── GitHub Release (main/prod 브랜치만) ────────────────────────────
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "version=$(node -p \"require('./packages/electron-app/package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: AI Hub v${{ steps.version.outputs.version }}
+          files: artifacts/**/*
+          draft: true
+          generate_release_notes: true

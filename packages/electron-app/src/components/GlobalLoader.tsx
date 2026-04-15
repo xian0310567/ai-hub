@@ -14,6 +14,8 @@ function dec() { _count = Math.max(0, _count - 1); _listeners.forEach(fn => fn()
 const SKIP_PATTERNS = [
   '/api/missions',       // 미션 (비동기 큐 방식)
   '/api/notifications',  // 알림 (백그라운드 폴링)
+  '/api/openclaw/',      // OpenClaw 상태 폴링
+  '/api/settings',       // 설정 조회
 ];
 
 function shouldSkip(input: RequestInfo | URL): boolean {

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aihub-pg-staging
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aihub
+      POSTGRES_PASSWORD: aihub1234
+      POSTGRES_DB: aihub_staging
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-staging-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihub"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  vm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.staging
+    container_name: aihub-vm-staging
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./src:/app/src
+    env_file: .env.staging
+    environment:
+      NODE_ENV: staging
+      DATABASE_URL: postgres://aihub:aihub1234@postgres:5432/aihub_staging
+
+volumes:
+  pg-staging-data:

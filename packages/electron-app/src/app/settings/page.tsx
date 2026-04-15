@@ -13,7 +13,7 @@ interface OrgMember { id: string; username: string; role: string; joined_at: num
 // ── 공통 스타일 ───────────────────────────────────────────────────
 const S: Record<string, React.CSSProperties> = {
   page:   { minHeight: '100vh', background: 'var(--bg-canvas)', color: 'var(--text-primary)', fontFamily: "'Inter', -apple-system, sans-serif", display: 'flex', flexDirection: 'column' },
-  hdr:    { height: 44, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
+  hdr:    { height: 54, display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-panel)', flexShrink: 0 },
   body:   { display: 'flex', flex: 1, overflow: 'hidden' },
   nav:    { width: 180, borderRight: '1px solid var(--border)', background: 'var(--bg-panel)', padding: '12px 0', flexShrink: 0 },
   main:   { flex: 1, overflowY: 'auto' as const, padding: '24px 28px' },
@@ -457,13 +457,315 @@ function BackupTab() {
   );
 }
 
+// ── MCP 서버 탭 ───────────────────────────────────────────────────
+interface McpConfig { id: string; name: string; label: string; command: string; args: string; env_json: string; enabled: number; }
+
+function McpTab() {
+  const [configs, setConfigs] = useState<McpConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: '', label: '', command: '', args: '', env: '' });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(() => {
+    fetch('/api/mcp-configs').then(r => r.json()).then(d => { setConfigs(d.configs ?? []); setLoading(false); });
+  }, []);
+  useEffect(load, [load]);
+
+  const toggle = async (cfg: McpConfig) => {
+    await fetch(`/api/mcp-configs/${cfg.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !cfg.enabled }) });
+    load();
+  };
+  const del = async (id: string) => {
+    if (!confirm('삭제하시겠습니까?')) return;
+    await fetch(`/api/mcp-configs/${id}`, { method: 'DELETE' });
+    load();
+  };
+  const add = async () => {
+    if (!form.name || !form.command) { setErr('이름과 command는 필수입니다'); return; }
+    setSaving(true); setErr('');
+    try {
+      let args: string[] = [];
+      if (form.args.trim()) args = form.args.split(/\s+/);
+      let env: Record<string, string> = {};
+      if (form.env.trim()) {
+        for (const line of form.env.split('\n')) {
+          const eq = line.indexOf('=');
+          if (eq > 0) env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+        }
+      }
+      const res = await fetch('/api/mcp-configs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: form.name, label: form.label || form.name, command: form.command, args, env }) });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      setForm({ name: '', label: '', command: '', args: '', env: '' });
+      load();
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>로딩 중…</div>;
+
+  return (
+    <div>
+      <div style={S.sec}>🔌 MCP 서버 설정</div>
+      <div style={S.hint}>Claude CLI에 연결할 MCP(Model Context Protocol) 서버를 등록합니다. 미션 실행 시 자동으로 --mcp-config로 전달됩니다.</div>
+
+      {/* 목록 */}
+      {configs.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 20 }}>등록된 MCP 서버가 없습니다.</div>
+      ) : (
+        <div style={{ ...S.card, marginBottom: 24 }}>
+          <div style={{ ...S.tblHdr, gridTemplateColumns: '1fr 1.5fr 2fr 80px 90px' }}>
+            <span>이름</span><span>레이블</span><span>Command</span><span>상태</span><span></span>
+          </div>
+          {configs.map(c => (
+            <div key={c.id} style={{ ...S.tblRow, gridTemplateColumns: '1fr 1.5fr 2fr 80px 90px' }}>
+              <span style={{ fontWeight: 600 }}>{c.name}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>{c.label}</span>
+              <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>{c.command} {JSON.parse(c.args || '[]').join(' ')}</span>
+              <span>
+                <button onClick={() => toggle(c)} style={{ ...S.btnSm, color: c.enabled ? 'var(--success, #4caf50)' : 'var(--text-muted)' }}>
+                  {c.enabled ? '✓ 활성' : '비활성'}
+                </button>
+              </span>
+              <span>
+                <button onClick={() => del(c.id)} style={S.btnDel}>삭제</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 추가 폼 */}
+      <div style={{ ...S.card, padding: 18 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>새 MCP 서버 추가</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <input style={S.input} placeholder="서버 이름 (예: filesystem)" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          <input style={S.input} placeholder="레이블 (선택)" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <input style={{ ...S.input, width: '100%' }} placeholder="command (예: npx)" value={form.command} onChange={e => setForm(f => ({ ...f, command: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <input style={{ ...S.input, width: '100%' }} placeholder="args (공백 구분, 예: @modelcontextprotocol/server-filesystem /tmp)" value={form.args} onChange={e => setForm(f => ({ ...f, args: e.target.value }))} />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <textarea style={{ ...S.input, width: '100%', minHeight: 60 }} placeholder={"환경변수 (KEY=VALUE, 줄바꿈 구분)\nAPI_KEY=your-key"} value={form.env} onChange={e => setForm(f => ({ ...f, env: e.target.value }))} />
+        </div>
+        {err && <div style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 10 }}>{err}</div>}
+        <button style={S.btn} onClick={add} disabled={saving}>{saving ? '저장 중…' : '추가'}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── OpenClaw 설정 탭 ─────────────────────────────────────────────
+interface SetupStatus {
+  configExists: boolean;
+  configPath: string;
+  currentModel: string | null;
+  claudeCli: { available: boolean; path: string | null; version: string | null; error?: string };
+  isConfigured: boolean;
+}
+interface ModelOption { id: string; label: string; description: string; default?: boolean }
+
+function OpenClawTab() {
+  const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    const res = await fetch('/api/openclaw/config');
+    const d = await res.json();
+    if (d.ok) {
+      setStatus(d.status);
+      setModels(d.supportedModels);
+      setSelectedModel(d.status.currentModel || d.supportedModels[0]?.id || '');
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  const apply = async () => {
+    setApplying(true);
+    setResult(null);
+    try {
+      const res = await fetch('/api/openclaw/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+      const d = await res.json();
+      if (d.ok) {
+        setResult({ ok: true, message: '설정이 적용되었습니다.' });
+        loadStatus();
+      } else {
+        setResult({ ok: false, message: d.error });
+      }
+    } catch {
+      setResult({ ok: false, message: '설정 적용 중 오류가 발생했습니다.' });
+    }
+    setApplying(false);
+  };
+
+  if (!status) return <div>로딩 중...</div>;
+
+  return (
+    <div>
+      <div style={S.sec}>OpenClaw 설정</div>
+      <div style={S.hint}>
+        OpenClaw 게이트웨이가 Claude CLI를 백엔드로 사용하도록 설정합니다.
+        API 키 없이 Claude Code 구독만으로 작동합니다.
+      </div>
+
+      {/* Claude CLI 상태 카드 */}
+      <div style={S.card}>
+        <div style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+            Claude CLI 상태
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              ...S.badge,
+              background: status.claudeCli.available ? '#14ae5c20' : '#ef444420',
+              color: status.claudeCli.available ? '#14ae5c' : '#ef4444',
+            }}>
+              {status.claudeCli.available ? '사용 가능' : '미설치'}
+            </span>
+            {status.claudeCli.version && (
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {status.claudeCli.version}
+              </span>
+            )}
+          </div>
+          {!status.claudeCli.available && (
+            <div style={{
+              marginTop: 12, padding: '10px 14px',
+              background: 'var(--bg-canvas)', borderRadius: 6, fontSize: 12,
+            }}>
+              Claude Code CLI를 먼저 설치하세요:
+              <code style={{
+                display: 'block', marginTop: 8, padding: '8px 12px',
+                background: 'var(--bg-elevated)', borderRadius: 4,
+                fontFamily: 'monospace',
+              }}>
+                npm install -g @anthropic-ai/claude-code
+              </code>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 설정 상태 카드 */}
+      <div style={S.card}>
+        <div style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+            설정 상태
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '8px 12px', fontSize: 13 }}>
+            <span style={{ color: 'var(--text-muted)' }}>설정 파일</span>
+            <span>{status.configExists ? '존재' : '없음'}</span>
+            <span style={{ color: 'var(--text-muted)' }}>경로</span>
+            <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{status.configPath}</span>
+            <span style={{ color: 'var(--text-muted)' }}>현재 모델</span>
+            <span>{status.currentModel || '(미설정)'}</span>
+            <span style={{ color: 'var(--text-muted)' }}>설정 완료</span>
+            <span style={{
+              color: status.isConfigured ? '#14ae5c' : 'var(--text-muted)'
+            }}>
+              {status.isConfigured ? '정상 구성됨' : '설정 필요'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 모델 선택 카드 */}
+      {status.claudeCli.available && (
+        <div style={S.card}>
+          <div style={{ padding: '16px 20px' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+              기본 모델 선택
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {models.map(m => (
+                <label key={m.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 14px', borderRadius: 6, cursor: 'pointer',
+                  border: selectedModel === m.id
+                    ? '2px solid var(--accent)'
+                    : '1px solid var(--border)',
+                  background: selectedModel === m.id
+                    ? 'var(--accent-subtle, var(--bg-elevated))'
+                    : 'var(--bg-canvas)',
+                }}>
+                  <input
+                    type="radio"
+                    name="model"
+                    value={m.id}
+                    checked={selectedModel === m.id}
+                    onChange={() => setSelectedModel(m.id)}
+                  />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {m.label}
+                      {m.default && (
+                        <span style={{
+                          ...S.badge, marginLeft: 8,
+                          background: 'var(--accent)', color: '#fff', fontSize: 10,
+                        }}>권장</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                      {m.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            {/* 적용 버튼 */}
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button
+                style={{ ...S.btn, opacity: applying ? 0.6 : 1 }}
+                onClick={apply}
+                disabled={applying}
+              >
+                {applying ? '적용 중...' : '설정 적용'}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                적용 시 게이트웨이가 자동으로 재시작됩니다
+              </span>
+            </div>
+
+            {/* 결과 메시지 */}
+            {result && (
+              <div style={{
+                marginTop: 12, padding: '10px 14px', borderRadius: 6,
+                background: result.ok ? '#14ae5c15' : '#ef444415',
+                color: result.ok ? '#14ae5c' : '#ef4444',
+                fontSize: 13,
+              }}>
+                {result.message}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 메인 페이지 ───────────────────────────────────────────────────
 const TABS = [
-  { id: 'hosts',      label: '💻 호스트 상태' },
-  { id: 'audit',      label: '📋 Audit Log' },
+  { id: 'hosts',        label: '💻 호스트 상태' },
+  { id: 'openclaw',     label: '🤖 OpenClaw' },
+  { id: 'audit',        label: '📋 Audit Log' },
   { id: 'team-members', label: '👥 팀 멤버십' },
   { id: 'org-members',  label: '🏢 조직 멤버' },
   { id: 'backup',       label: '💾 백업' },
+  { id: 'mcp',          label: '🔌 MCP 서버' },
 ];
 
 function SettingsContent() {
@@ -503,7 +805,7 @@ function SettingsContent() {
 
       <div style={S.body}>
         {/* Side nav */}
-        <nav style={S.nav}>
+        <div style={S.nav}>
           {TABS.map(t => (
             <button key={t.id} style={{
               ...S.navItem,
@@ -517,15 +819,17 @@ function SettingsContent() {
               {t.label}
             </button>
           ))}
-        </nav>
+        </div>
 
         {/* Content */}
         <div style={S.main}>
           {tab === 'hosts'        && <HostsTab />}
+          {tab === 'openclaw'     && <OpenClawTab />}
           {tab === 'audit'        && <AuditTab />}
           {tab === 'team-members' && <TeamMembersTab userRole={userRole} orgId={orgId} />}
           {tab === 'org-members'  && <OrgMembersTab userRole={userRole} orgId={orgId} />}
           {tab === 'backup'       && <BackupTab />}
+          {tab === 'mcp'          && <McpTab />}
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   // output: 'standalone',  // tsx server.ts 방식이라 불필요
+  serverExternalPackages: ['better-sqlite3', 'cron-parser', 'keytar'],
   allowedDevOrigins: [
     '*.ngrok-free.app',
     '*.ngrok.io',
@@ -9,9 +10,16 @@ const nextConfig: NextConfig = {
   ],
   outputFileTracingExcludes: {
     '/_global-error': ['**/*'],
+    '/**': [
+      '../openclaw/**',
+      '../../packages/openclaw/**',
+      'playwright.config.ts',
+      'tests/**',
+    ],
   },
   skipTrailingSlashRedirect: true,
-  skipMiddlewareUrlNormalize: true,
+  skipProxyUrlNormalize: true,
+  turbopack: {},
 };
 
 export default nextConfig;

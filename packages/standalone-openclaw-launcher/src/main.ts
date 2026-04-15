@@ -1,9 +1,11 @@
 // src/main.ts
 //
-// Frontend entry point. This renders a tiny vanilla-DOM wizard — no framework,
-// because the surface is small (four steps) and we want the bundle to stay
-// light. The wizard drives a `WizardStateMachine` defined in `./wizard.ts`,
-// which is exercised by unit tests.
+// Frontend entry point. Renders a vanilla-DOM wizard that walks through:
+//
+//   welcome → install → claude-login → telegram → workspace → done
+//
+// All business logic lives in `wizard.ts`; this file is pure rendering +
+// IPC plumbing.
 
 import { createWizardStateMachine, type WizardState } from "./wizard.ts";
 import { bridge } from "./ipc.ts";
@@ -14,7 +16,6 @@ if (!root) {
 }
 
 const machine = createWizardStateMachine();
-let lastBootstrapPercent = 0;
 
 async function hydrate(): Promise<void> {
   try {
@@ -27,6 +28,11 @@ async function hydrate(): Promise<void> {
       onboarded: defaults.config.onboarded,
       claudeDetected: defaults.detected_claude.exists,
     });
+    // If we already have credentials we can skip the login step on reruns.
+    const auth = await bridge.checkClaudeAuth();
+    if (auth.credentials_exist && auth.credentials_size > 0) {
+      machine.markClaudeAuthOk();
+    }
   } catch (err) {
     machine.setError(String(err));
   }
@@ -39,8 +45,10 @@ bridge.onStatus((snap) => {
 });
 
 bridge.onBootstrapProgress((progress) => {
-  lastBootstrapPercent = progress.percent ?? lastBootstrapPercent;
-  machine.setBootstrapMessage(progress.message);
+  machine.setBootstrapProgress(progress.message, progress.percent);
+  if (progress.step === "done") {
+    machine.markBootstrapComplete();
+  }
   render();
 });
 
@@ -52,17 +60,17 @@ function render(): void {
     case "welcome":
       root!.appendChild(renderWelcome(state));
       break;
-    case "claude":
-      root!.appendChild(renderClaudeStep(state));
+    case "install":
+      root!.appendChild(renderInstallStep(state));
+      break;
+    case "claude-login":
+      root!.appendChild(renderClaudeLoginStep(state));
       break;
     case "telegram":
       root!.appendChild(renderTelegramStep(state));
       break;
     case "workspace":
       root!.appendChild(renderWorkspaceStep(state));
-      break;
-    case "bootstrap":
-      root!.appendChild(renderBootstrapStep(state));
       break;
     case "done":
       root!.appendChild(renderDoneStep(state));
@@ -72,7 +80,7 @@ function render(): void {
 
 function renderHeader(state: WizardState): HTMLElement {
   const el = document.createElement("header");
-  const steps = ["welcome", "claude", "telegram", "workspace", "bootstrap", "done"] as const;
+  const steps = ["welcome", "install", "claude-login", "telegram", "workspace", "done"] as const;
   const stepper = document.createElement("div");
   stepper.className = "stepper";
   steps.forEach((stepId, index) => {
@@ -103,16 +111,20 @@ function renderWelcome(_state: WizardState): HTMLElement {
     <h2>Welcome</h2>
     <p class="hint">
       This launcher sets up <code>standalone-openclaw</code> on this machine and keeps
-      the gateway running in the background. We'll install a portable Node.js runtime,
-      wire the local <code>claude</code> binary, collect your Telegram bot token, and
-      pick a workspace folder. The whole thing takes about 2 minutes the first time.
+      the gateway running in the background.
+    </p>
+    <p class="hint">
+      We'll: (1) install a portable Node.js runtime and the Claude CLI,
+      (2) walk you through <code>claude auth login</code>,
+      (3) collect your Telegram bot token, and (4) pick a workspace folder.
     </p>
   `;
   const actions = document.createElement("div");
   actions.className = "actions";
   const next = button("Start setup", () => {
-    machine.goto("claude");
+    machine.goto("install");
     render();
+    void startInstall();
   });
   actions.appendChild(document.createElement("div"));
   actions.appendChild(next);
@@ -120,55 +132,100 @@ function renderWelcome(_state: WizardState): HTMLElement {
   return card;
 }
 
-function renderClaudeStep(state: WizardState): HTMLElement {
+async function startInstall(): Promise<void> {
+  // Idempotent: if bootstrap already ran, `needs_bootstrap` returns false and
+  // `run_bootstrap` is a no-op other than emitting "done".
+  try {
+    await bridge.runBootstrap();
+    machine.markBootstrapComplete();
+    render();
+  } catch (err) {
+    machine.setError(String(err));
+    render();
+  }
+}
+
+function renderInstallStep(state: WizardState): HTMLElement {
   const card = document.createElement("section");
   card.className = "card";
-  card.appendChild(h2("1. Local Claude CLI"));
+  card.appendChild(h2("1. Installing runtime + dependencies"));
+
+  const msg = document.createElement("p");
+  msg.className = "hint";
+  msg.textContent = state.bootstrapMessage ?? "Preparing…";
+  card.appendChild(msg);
+
+  const progress = document.createElement("div");
+  progress.className = "progress";
+  const fill = document.createElement("div");
+  fill.className = "fill";
+  fill.style.width = `${state.bootstrapPercent}%`;
+  progress.appendChild(fill);
+  card.appendChild(progress);
+
+  if (state.error) {
+    const err = document.createElement("div");
+    err.className = "error";
+    err.textContent = state.error;
+    card.appendChild(err);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.appendChild(
+      button("Retry", () => {
+        machine.setError(null);
+        render();
+        void startInstall();
+      }),
+    );
+    card.appendChild(actions);
+    return card;
+  }
+
+  if (state.bootstrapComplete) {
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.appendChild(document.createElement("div"));
+    actions.appendChild(
+      button("Continue", async () => {
+        // Re-probe the binary now that npm install has finished; the bundled
+        // path is the canonical default after this point.
+        const report = await bridge.checkClaudeBinary("");
+        if (report.exists) {
+          machine.setField("claudeCliPath", report.path);
+        }
+        machine.goto("claude-login");
+        render();
+      }),
+    );
+    card.appendChild(actions);
+  }
+  return card;
+}
+
+function renderClaudeLoginStep(state: WizardState): HTMLElement {
+  const card = document.createElement("section");
+  card.className = "card";
+  card.appendChild(h2("2. Authenticate with Anthropic"));
+
   const hint = document.createElement("p");
   hint.className = "hint";
   hint.innerHTML = `
-    We need the path to your local <code>claude</code> binary (Anthropic Claude Code).
-    If it's already on PATH we detected it for you. Otherwise use <em>Pick file</em>
-    to locate <code>claude.cmd</code>.
+    We'll open a console running <code>claude auth login</code>.
+    Complete the browser OAuth flow there, then come back and click
+    <em>I finished login</em>. Credentials are stored by Claude at
+    <code>~/.claude/.credentials.json</code> and read by OpenClaw at runtime.
   `;
   card.appendChild(hint);
 
-  const row = document.createElement("div");
-  row.className = "row";
-  const wrap = document.createElement("div");
-  wrap.className = "grow";
-  const label = document.createElement("label");
-  label.textContent = "Claude binary path";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.value = state.claudeCliPath;
-  input.placeholder = "C:/Users/you/AppData/Roaming/npm/claude.cmd";
-  input.addEventListener("input", () => {
-    machine.setField("claudeCliPath", input.value);
-  });
-  wrap.appendChild(label);
-  wrap.appendChild(input);
+  const pathRow = document.createElement("div");
+  pathRow.className = "mono";
+  pathRow.textContent = state.claudeCliPath || "(using bundled Claude CLI)";
+  card.appendChild(pathRow);
 
-  const pick = button("Pick file", async () => {
-    const picked = await bridge.pickFile({
-      title: "Select Claude binary",
-      extensions: ["cmd", "exe", "bat"],
-    });
-    if (picked) {
-      machine.setField("claudeCliPath", picked);
-      render();
-    }
-  });
-  pick.classList.add("secondary");
-
-  row.appendChild(wrap);
-  row.appendChild(pick);
-  card.appendChild(row);
-
-  if (state.claudeDetected) {
+  if (state.claudeAuthOk) {
     const pill = document.createElement("span");
     pill.className = "pill ok";
-    pill.textContent = "Detected on PATH";
+    pill.textContent = "Credentials detected";
     card.appendChild(pill);
   }
 
@@ -182,24 +239,58 @@ function renderClaudeStep(state: WizardState): HTMLElement {
   const actions = document.createElement("div");
   actions.className = "actions";
   actions.appendChild(
-    button("Back", () => {
-      machine.goto("welcome");
-      render();
-    }, "secondary"),
-  );
-  actions.appendChild(
-    button("Next", async () => {
-      const report = await bridge.checkClaudeBinary(state.claudeCliPath);
-      if (!report.exists) {
-        machine.setError(`Claude binary not found at: ${state.claudeCliPath}`);
+    button(
+      "Back",
+      () => {
+        machine.goto("install");
         render();
-        return;
+      },
+      "secondary",
+    ),
+  );
+
+  const rightGroup = document.createElement("div");
+  rightGroup.style.display = "flex";
+  rightGroup.style.gap = "8px";
+  rightGroup.appendChild(
+    button(
+      "Launch claude auth login",
+      async () => {
+        try {
+          await bridge.launchClaudeLogin(state.claudeCliPath);
+        } catch (err) {
+          machine.setError(String(err));
+          render();
+        }
+      },
+      "secondary",
+    ),
+  );
+  rightGroup.appendChild(
+    button("I finished login", async () => {
+      const auth = await bridge.checkClaudeAuth();
+      if (auth.credentials_exist && auth.credentials_size > 0) {
+        machine.markClaudeAuthOk();
+        machine.setError(null);
+        machine.goto("telegram");
+        render();
+      } else {
+        machine.setError(
+          `No credentials found at ${auth.credentials_path}. Complete the OAuth flow, then try again.`,
+        );
+        render();
       }
-      machine.setError(null);
-      machine.goto("telegram");
-      render();
     }),
   );
+  if (state.claudeAuthOk) {
+    rightGroup.appendChild(
+      button("Skip (already logged in)", () => {
+        machine.goto("telegram");
+        render();
+      }, "secondary"),
+    );
+  }
+  actions.appendChild(rightGroup);
   card.appendChild(actions);
   return card;
 }
@@ -207,7 +298,7 @@ function renderClaudeStep(state: WizardState): HTMLElement {
 function renderTelegramStep(state: WizardState): HTMLElement {
   const card = document.createElement("section");
   card.className = "card";
-  card.appendChild(h2("2. Telegram bot"));
+  card.appendChild(h2("3. Telegram bot"));
 
   const hint = document.createElement("p");
   hint.className = "hint";
@@ -220,7 +311,9 @@ function renderTelegramStep(state: WizardState): HTMLElement {
   card.appendChild(hint);
 
   card.appendChild(input("Account id", state.telegramAccountId, (v) => machine.setField("telegramAccountId", v)));
-  card.appendChild(input("Bot token", state.telegramBotToken, (v) => machine.setField("telegramBotToken", v), "password"));
+  card.appendChild(
+    input("Bot token", state.telegramBotToken, (v) => machine.setField("telegramBotToken", v), "password"),
+  );
 
   if (state.error) {
     const err = document.createElement("div");
@@ -232,10 +325,14 @@ function renderTelegramStep(state: WizardState): HTMLElement {
   const actions = document.createElement("div");
   actions.className = "actions";
   actions.appendChild(
-    button("Back", () => {
-      machine.goto("claude");
-      render();
-    }, "secondary"),
+    button(
+      "Back",
+      () => {
+        machine.goto("claude-login");
+        render();
+      },
+      "secondary",
+    ),
   );
   actions.appendChild(
     button("Next", () => {
@@ -256,7 +353,7 @@ function renderTelegramStep(state: WizardState): HTMLElement {
 function renderWorkspaceStep(state: WizardState): HTMLElement {
   const card = document.createElement("section");
   card.className = "card";
-  card.appendChild(h2("3. Workspace folder"));
+  card.appendChild(h2("4. Workspace folder"));
 
   const hint = document.createElement("p");
   hint.className = "hint";
@@ -270,13 +367,17 @@ function renderWorkspaceStep(state: WizardState): HTMLElement {
   wrap.appendChild(input("Workspace path", state.workspaceDir, (v) => machine.setField("workspaceDir", v)));
   row.appendChild(wrap);
   row.appendChild(
-    button("Pick folder", async () => {
-      const picked = await bridge.pickFolder({ title: "Select workspace folder" });
-      if (picked) {
-        machine.setField("workspaceDir", picked);
-        render();
-      }
-    }, "secondary"),
+    button(
+      "Pick folder",
+      async () => {
+        const picked = await bridge.pickFolder({ title: "Select workspace folder" });
+        if (picked) {
+          machine.setField("workspaceDir", picked);
+          render();
+        }
+      },
+      "secondary",
+    ),
   );
   card.appendChild(row);
 
@@ -299,15 +400,17 @@ function renderWorkspaceStep(state: WizardState): HTMLElement {
   const actions = document.createElement("div");
   actions.className = "actions";
   actions.appendChild(
-    button("Back", () => {
-      machine.goto("telegram");
-      render();
-    }, "secondary"),
+    button(
+      "Back",
+      () => {
+        machine.goto("telegram");
+        render();
+      },
+      "secondary",
+    ),
   );
   actions.appendChild(
-    button("Install & start", async () => {
-      machine.goto("bootstrap");
-      render();
+    button("Save & start gateway", async () => {
       try {
         await bridge.saveWizardConfig({
           answers: {
@@ -320,37 +423,15 @@ function renderWorkspaceStep(state: WizardState): HTMLElement {
           },
           enable_autostart: true,
         });
-        await bridge.runBootstrap();
         machine.goto("done");
         render();
       } catch (err) {
         machine.setError(String(err));
-        machine.goto("workspace");
         render();
       }
     }),
   );
   card.appendChild(actions);
-  return card;
-}
-
-function renderBootstrapStep(state: WizardState): HTMLElement {
-  const card = document.createElement("section");
-  card.className = "card";
-  card.appendChild(h2("Installing"));
-
-  const msg = document.createElement("p");
-  msg.className = "hint";
-  msg.textContent = state.bootstrapMessage ?? "Starting bootstrap…";
-  card.appendChild(msg);
-
-  const progress = document.createElement("div");
-  progress.className = "progress";
-  const fill = document.createElement("div");
-  fill.className = "fill";
-  fill.style.width = `${lastBootstrapPercent}%`;
-  progress.appendChild(fill);
-  card.appendChild(progress);
   return card;
 }
 
@@ -376,9 +457,13 @@ function renderDoneStep(state: WizardState): HTMLElement {
     }),
   );
   actions.appendChild(
-    button("Close wizard", async () => {
-      await bridge.closeWizard();
-    }, "secondary"),
+    button(
+      "Close wizard",
+      async () => {
+        await bridge.closeWizard();
+      },
+      "secondary",
+    ),
   );
   card.appendChild(actions);
   return card;

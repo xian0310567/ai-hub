@@ -1,10 +1,12 @@
 // tests/wizard.test.ts
 //
-// Unit tests for the wizard state machine. This is the one piece of frontend
-// logic that benefits from isolated testing — everything else is bridge glue.
+// Unit tests for the wizard state machine. Step ordering is enforced here so
+// accidental refactors can't silently drop a dependency — e.g. moving
+// "claude-login" before "install" would break, since the bundled claude.cmd
+// only exists after install runs.
 
 import { describe, expect, it } from "vitest";
-import { createWizardStateMachine } from "../src/wizard.ts";
+import { createWizardStateMachine, STEP_ORDER } from "../src/wizard.ts";
 
 describe("wizard state machine", () => {
   it("starts on welcome step with empty fields", () => {
@@ -13,13 +15,29 @@ describe("wizard state machine", () => {
     expect(m.state.claudeCliPath).toBe("");
     expect(m.state.gatewayPort).toBe(18789);
     expect(m.state.completed.size).toBe(0);
+    expect(m.state.bootstrapComplete).toBe(false);
+    expect(m.state.claudeAuthOk).toBe(false);
+  });
+
+  it("declares install → claude-login as a hard ordering", () => {
+    // If this order ever changes, the bundled claude.cmd suggestion logic in
+    // `main.ts`'s renderInstallStep will be wrong.
+    expect(STEP_ORDER).toEqual([
+      "welcome",
+      "install",
+      "claude-login",
+      "telegram",
+      "workspace",
+      "done",
+    ]);
   });
 
   it("marks earlier steps as completed when going forward", () => {
     const m = createWizardStateMachine();
     m.goto("workspace");
     expect(m.state.completed.has("welcome")).toBe(true);
-    expect(m.state.completed.has("claude")).toBe(true);
+    expect(m.state.completed.has("install")).toBe(true);
+    expect(m.state.completed.has("claude-login")).toBe(true);
     expect(m.state.completed.has("telegram")).toBe(true);
     expect(m.state.completed.has("workspace")).toBe(false);
   });
@@ -27,17 +45,35 @@ describe("wizard state machine", () => {
   it("preserves completed markers when going back", () => {
     const m = createWizardStateMachine();
     m.goto("workspace");
-    m.goto("claude");
-    expect(m.state.step).toBe("claude");
+    m.goto("claude-login");
+    expect(m.state.step).toBe("claude-login");
     expect(m.state.completed.has("welcome")).toBe(true);
+    expect(m.state.completed.has("install")).toBe(true);
   });
 
   it("clears error on step transition", () => {
     const m = createWizardStateMachine();
     m.setError("boom");
     expect(m.state.error).toBe("boom");
-    m.goto("claude");
+    m.goto("install");
     expect(m.state.error).toBeNull();
+  });
+
+  it("records bootstrap progress and completion separately", () => {
+    const m = createWizardStateMachine();
+    m.setBootstrapProgress("downloading", 40);
+    expect(m.state.bootstrapPercent).toBe(40);
+    expect(m.state.bootstrapComplete).toBe(false);
+    m.markBootstrapComplete();
+    expect(m.state.bootstrapComplete).toBe(true);
+    expect(m.state.bootstrapPercent).toBe(100);
+  });
+
+  it("records claude auth ok state independently", () => {
+    const m = createWizardStateMachine();
+    expect(m.state.claudeAuthOk).toBe(false);
+    m.markClaudeAuthOk();
+    expect(m.state.claudeAuthOk).toBe(true);
   });
 
   it("hydrates from persisted config", () => {
@@ -67,6 +103,7 @@ describe("wizard state machine", () => {
       claudeDetected: true,
     });
     expect(m.state.step).toBe("done");
+    expect(m.state.completed.has("workspace")).toBe(true);
   });
 
   it("typed setField updates string fields", () => {

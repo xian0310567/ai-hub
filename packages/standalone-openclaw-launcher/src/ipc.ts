@@ -17,6 +17,12 @@ export interface ClaudeBinaryReport {
   path_on_path: string | null;
 }
 
+export interface ClaudeAuthReport {
+  credentials_path: string;
+  credentials_exist: boolean;
+  credentials_size: number;
+}
+
 export interface LauncherConfig {
   onboarded: boolean;
   claude_cli_path: string | null;
@@ -52,6 +58,8 @@ export interface Bridge {
   getStatus(): Promise<GatewayStatusSnapshot>;
   getWizardDefaults(): Promise<WizardDefaults>;
   checkClaudeBinary(path: string): Promise<ClaudeBinaryReport>;
+  checkClaudeAuth(): Promise<ClaudeAuthReport>;
+  launchClaudeLogin(claudePath: string): Promise<void>;
   saveWizardConfig(args: {
     answers: WizardAnswers;
     enable_autostart: boolean;
@@ -77,6 +85,9 @@ export const bridge: Bridge = {
   getWizardDefaults: () => invoke<WizardDefaults>("get_wizard_defaults"),
   checkClaudeBinary: (path) =>
     invoke<ClaudeBinaryReport>("check_claude_binary", { path: path || null }),
+  checkClaudeAuth: () => invoke<ClaudeAuthReport>("check_claude_auth"),
+  launchClaudeLogin: (claudePath) =>
+    invoke<void>("launch_claude_login", { claudePath: claudePath || null }),
   saveWizardConfig: (args) => invoke<void>("save_wizard_config", { args }),
   runBootstrap: () => invoke<void>("run_bootstrap"),
   openDashboard: () => invoke<void>("open_dashboard"),

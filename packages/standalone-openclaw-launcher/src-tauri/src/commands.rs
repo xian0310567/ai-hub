@@ -82,9 +82,19 @@ pub struct ClaudeBinaryReport {
 
 #[tauri::command]
 pub fn check_claude_binary(path: Option<String>) -> Result<ClaudeBinaryReport, String> {
+    // Resolution order matches what we show the user in the wizard:
+    //   1. Whatever path the user typed (if non-empty).
+    //   2. The bundled claude.cmd under `%LOCALAPPDATA%\StandaloneOpenClaw\deps\`,
+    //      which `bootstrap.rs` installs via `npm install @anthropic-ai/claude-code`.
+    //   3. `claude` on PATH.
+    let bundled = paths::bundled_claude_cli()
+        .ok()
+        .filter(|p| p.exists());
+
     let candidate = path
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
+        .or_else(|| bundled.clone())
         .or_else(|| which_binary("claude"));
 
     let path_on_path = which_binary("claude").map(|p| p.display().to_string());
@@ -128,6 +138,76 @@ fn which_binary(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClaudeAuthReport {
+    /// Absolute path to `~/.claude/.credentials.json` (regardless of existence).
+    pub credentials_path: String,
+    pub credentials_exist: bool,
+    /// Size in bytes; non-zero implies Claude wrote real credentials into the file.
+    pub credentials_size: u64,
+}
+
+#[tauri::command]
+pub fn check_claude_auth() -> Result<ClaudeAuthReport, String> {
+    // Claude Code stores the OAuth result at ~/.claude/.credentials.json.
+    // We never read the file's contents — existence + non-zero size is the
+    // signal the wizard needs to decide whether to proceed.
+    let home = dirs::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
+    let credentials = home.join(".claude").join(".credentials.json");
+    let (exists, size) = match std::fs::metadata(&credentials) {
+        Ok(meta) => (meta.is_file(), meta.len()),
+        Err(_) => (false, 0),
+    };
+    Ok(ClaudeAuthReport {
+        credentials_path: credentials.display().to_string(),
+        credentials_exist: exists,
+        credentials_size: size,
+    })
+}
+
+#[tauri::command]
+pub fn launch_claude_login(app: AppHandle, claude_path: Option<String>) -> Result<(), String> {
+    // Prefer the bundled claude.cmd (it matches what OpenClaw will call at
+    // runtime). Fall back to whatever the wizard currently has, then PATH.
+    let explicit = claude_path
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from);
+    let bundled = paths::bundled_claude_cli().ok().filter(|p| p.exists());
+    let on_path = which_binary("claude");
+    let claude = explicit
+        .or(bundled)
+        .or(on_path)
+        .ok_or_else(|| "Claude CLI binary not found".to_string())?;
+
+    use tauri_plugin_shell::ShellExt;
+    let shell = app.shell();
+
+    #[cfg(target_os = "windows")]
+    {
+        // Open a new console so the user can watch the OAuth handoff and see
+        // any error output. `cmd /c start cmd /k <claude> auth login`
+        // spawns cmd.exe, asks it to keep the window open after the command
+        // exits, and runs claude inside.
+        let claude_str = claude.display().to_string();
+        shell
+            .command("cmd")
+            .args([
+                "/c", "start", "cmd", "/k", &claude_str, "auth", "login",
+            ])
+            .spawn()
+            .map_err(to_string_err)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        shell
+            .command(claude.display().to_string())
+            .args(["auth", "login"])
+            .spawn()
+            .map_err(to_string_err)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

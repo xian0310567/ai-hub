@@ -67,6 +67,8 @@ pub fn run() {
             commands::open_logs_dir,
             commands::run_bootstrap,
             commands::check_claude_binary,
+            commands::check_claude_auth,
+            commands::launch_claude_login,
             commands::save_wizard_config,
             commands::get_wizard_defaults,
             commands::set_autostart,

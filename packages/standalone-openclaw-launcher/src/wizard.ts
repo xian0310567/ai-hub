@@ -3,13 +3,23 @@
 // Pure state machine for the setup wizard. No DOM access here so we can unit
 // test it with vitest. The DOM side (`main.ts`) calls `machine.goto` /
 // `machine.setField` and re-renders.
+//
+// Step ordering reflects the actual dependency chain:
+//
+//   welcome        → intro
+//   install        → bootstrap downloads portable Node + runs `npm install`
+//                    (only after this is the bundled claude.cmd available)
+//   claude-login   → spawn `claude auth login` in a terminal, verify creds
+//   telegram       → collect bot token + account id
+//   workspace      → pick workspace folder + gateway port
+//   done           → persist openclaw.json + start gateway
 
 export type StepId =
   | "welcome"
-  | "claude"
+  | "install"
+  | "claude-login"
   | "telegram"
   | "workspace"
-  | "bootstrap"
   | "done";
 
 export interface GatewayStatusSnapshot {
@@ -25,11 +35,14 @@ export interface WizardState {
   completed: Set<StepId>;
   claudeCliPath: string;
   claudeDetected: boolean;
+  claudeAuthOk: boolean;
   telegramAccountId: string;
   telegramBotToken: string;
   workspaceDir: string;
   gatewayPort: number;
   bootstrapMessage: string | null;
+  bootstrapPercent: number;
+  bootstrapComplete: boolean;
   gatewayStatus: GatewayStatusSnapshot | null;
   error: string | null;
 }
@@ -48,7 +61,9 @@ export interface WizardStateMachine {
   goto(step: StepId): void;
   setField<K extends FieldKey>(key: K, value: FieldValue<K>): void;
   setError(message: string | null): void;
-  setBootstrapMessage(message: string): void;
+  setBootstrapProgress(message: string, percent: number | null): void;
+  markBootstrapComplete(): void;
+  markClaudeAuthOk(): void;
   updateGatewayStatus(snap: GatewayStatusSnapshot): void;
   hydrate(args: HydrateArgs): void;
 }
@@ -62,12 +77,12 @@ type FieldKey =
 
 type FieldValue<K extends FieldKey> = K extends "gatewayPort" ? number : string;
 
-const STEP_ORDER: readonly StepId[] = [
+export const STEP_ORDER: readonly StepId[] = [
   "welcome",
-  "claude",
+  "install",
+  "claude-login",
   "telegram",
   "workspace",
-  "bootstrap",
   "done",
 ];
 
@@ -77,11 +92,14 @@ export function createWizardStateMachine(): WizardStateMachine {
     completed: new Set<StepId>(),
     claudeCliPath: "",
     claudeDetected: false,
+    claudeAuthOk: false,
     telegramAccountId: "default",
     telegramBotToken: "",
     workspaceDir: "",
     gatewayPort: 18789,
     bootstrapMessage: null,
+    bootstrapPercent: 0,
+    bootstrapComplete: false,
     gatewayStatus: null,
     error: null,
   };
@@ -94,14 +112,9 @@ export function createWizardStateMachine(): WizardStateMachine {
       if (!STEP_ORDER.includes(step)) {
         return;
       }
-      const currentIdx = STEP_ORDER.indexOf(state.step);
       const nextIdx = STEP_ORDER.indexOf(step);
-      // Mark everything strictly before the target step as completed.
       for (let i = 0; i < nextIdx; i += 1) {
         state.completed.add(STEP_ORDER[i]!);
-      }
-      if (nextIdx < currentIdx) {
-        // Going back: preserve completed markers, just move the cursor.
       }
       state.step = step;
       state.error = null;
@@ -112,8 +125,18 @@ export function createWizardStateMachine(): WizardStateMachine {
     setError(message: string | null) {
       state.error = message;
     },
-    setBootstrapMessage(message: string) {
+    setBootstrapProgress(message: string, percent: number | null) {
       state.bootstrapMessage = message;
+      if (typeof percent === "number") {
+        state.bootstrapPercent = percent;
+      }
+    },
+    markBootstrapComplete() {
+      state.bootstrapComplete = true;
+      state.bootstrapPercent = 100;
+    },
+    markClaudeAuthOk() {
+      state.claudeAuthOk = true;
     },
     updateGatewayStatus(snap: GatewayStatusSnapshot) {
       state.gatewayStatus = snap;

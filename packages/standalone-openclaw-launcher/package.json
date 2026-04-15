@@ -1,0 +1,31 @@
+{
+  "name": "standalone-openclaw-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-native tray launcher for standalone-openclaw: supervises the gateway child process, embeds the Control UI, auto-starts on login, and runs a first-run setup wizard.",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-autostart": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.1",
+    "@tauri-apps/plugin-notification": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.1",
+    "@tauri-apps/plugin-updater": "^2.0.0"
+  }
+}

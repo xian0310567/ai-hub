@@ -207,6 +207,23 @@ fn extract_node_zip(_zip_path: &Path, _runtime_dir: &Path) -> Result<()> {
     bail!("automatic Node bootstrap is Windows-only; install Node manually for this platform")
 }
 
+#[cfg(target_os = "windows")]
+fn strip_windows_extended_prefix(path: &Path) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let s = path.as_os_str().to_string_lossy();
+    // Handle both `\\?\C:\...` (local drive) and `\\?\UNC\server\share` forms.
+    // For UNC we keep it as-is since stripping would change the meaning.
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if rest.starts_with("UNC\\") {
+            path.to_path_buf()
+        } else {
+            PathBuf::from(rest)
+        }
+    } else {
+        path.to_path_buf()
+    }
+}
+
 async fn npm_install(handle: &AppHandle) -> Result<()> {
     let npm = paths::npm_cmd()?;
     let deps = paths::deps_dir()?;
@@ -225,6 +242,15 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
             openclaw_tarball.display()
         );
     }
+    // Tauri's path resolver returns Windows extended-length paths
+    // (`\\?\C:\...`). npm's arg parser mis-interprets the `\\?\` prefix as
+    // part of a `file:` URL, truncates the real path to `file:C:\ (null)`,
+    // then tries to read that and fails with EISDIR. Strip the prefix for
+    // npm so it sees a plain `C:\...` path. Safe here because the resource
+    // path is well under the 260-char limit that would actually require
+    // the extended prefix.
+    #[cfg(target_os = "windows")]
+    let openclaw_tarball = strip_windows_extended_prefix(&openclaw_tarball);
 
     emit(handle, "npm-install", "Running npm install (this may take a minute)", Some(60));
 
@@ -269,5 +295,33 @@ mod tests {
         let url = node_download_url().expect("platform supported");
         assert!(url.starts_with("https://nodejs.org/dist/v"));
         assert!(url.contains(NODE_VERSION));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn strips_local_drive_extended_prefix() {
+        let input = Path::new(r"\\?\C:\Users\the_c\AppData\Local\StandaloneOpenClaw\tarball.tgz");
+        let out = strip_windows_extended_prefix(input);
+        assert_eq!(
+            out.as_os_str().to_string_lossy(),
+            r"C:\Users\the_c\AppData\Local\StandaloneOpenClaw\tarball.tgz"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn leaves_plain_path_untouched() {
+        let input = Path::new(r"C:\Users\the_c\tarball.tgz");
+        let out = strip_windows_extended_prefix(input);
+        assert_eq!(out, input);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn preserves_unc_extended_prefix() {
+        // `\\?\UNC\server\share` needs the prefix to stay meaningful; don't strip.
+        let input = Path::new(r"\\?\UNC\server\share\file.tgz");
+        let out = strip_windows_extended_prefix(input);
+        assert_eq!(out, input);
     }
 }

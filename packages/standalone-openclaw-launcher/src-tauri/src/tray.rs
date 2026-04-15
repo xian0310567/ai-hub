@@ -52,8 +52,6 @@ pub fn build_tray(app: &AppHandle) -> Result<()> {
         MenuItem::with_id(app, "open_wizard", "Re-run Setup Wizard", true, None::<&str>)?;
     let reauth_item =
         MenuItem::with_id(app, "reauth_claude", "Re-authenticate Claude", true, None::<&str>)?;
-    let update_item =
-        MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -68,7 +66,6 @@ pub fn build_tray(app: &AppHandle) -> Result<()> {
             &wizard_item,
             &reauth_item,
             &sep2,
-            &update_item,
             &quit_item,
         ],
     )?;
@@ -122,11 +119,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
         }
         "reauth_claude" => spawn_reauth_terminal(app),
-        "check_updates" => {
-            // Actual updater logic is wired into the frontend; here we just
-            // emit an event the dashboard listens for.
-            let _ = tauri::Emitter::emit(app, "launcher://check-updates-requested", ());
-        }
         "quit" => app.exit(0),
         _ => {}
     }

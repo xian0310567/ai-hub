@@ -76,12 +76,6 @@
     }
   },
   "plugins": {
-    "updater": {
-      "pubkey": "REPLACE_WITH_PUBLIC_KEY_BASE64",
-      "endpoints": [
-        "https://github.com/xian0310567/ai-hub/releases/latest/download/launcher-update.json"
-      ]
-    },
     "shell": {
       "open": true
     }

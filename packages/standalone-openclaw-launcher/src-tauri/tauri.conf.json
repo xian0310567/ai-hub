@@ -70,7 +70,7 @@
         "language": ["en-US", "ko-KR"]
       },
       "nsis": {
-        "installMode": "perUser",
+        "installMode": "currentUser",
         "installerIcon": "icons/icon.ico"
       }
     }

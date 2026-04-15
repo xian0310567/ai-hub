@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Standalone OpenClaw",
+  "version": "0.1.0",
+  "identifier": "ai.openclaw.standalone.launcher",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist",
+    "beforeDevCommand": "pnpm dev:web",
+    "beforeBuildCommand": "pnpm build:web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "wizard",
+        "title": "Standalone OpenClaw Setup",
+        "width": 900,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true,
+        "visible": false,
+        "center": true,
+        "decorations": true
+      },
+      {
+        "label": "dashboard",
+        "title": "Standalone OpenClaw",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "visible": false,
+        "url": "http://127.0.0.1:18789"
+      }
+    ],
+    "security": {
+      "csp": null,
+      "dangerousDisableAssetCspModification": false
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": false,
+      "tooltip": "Standalone OpenClaw"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/tray-running.png",
+      "resources/tray-warn.png",
+      "resources/tray-error.png",
+      "resources/tray-grey.png"
+    ],
+    "shortDescription": "Tray launcher for Standalone OpenClaw",
+    "longDescription": "Supervises the standalone-openclaw gateway on Windows, embeds the Control UI, manages the first-run wizard, and keeps the service running across reboots.",
+    "publisher": "ai-hub",
+    "category": "DeveloperTool",
+    "windows": {
+      "wix": {
+        "language": ["en-US", "ko-KR"]
+      },
+      "nsis": {
+        "installMode": "perUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

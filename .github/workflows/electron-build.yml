@@ -119,10 +119,30 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Get version
+      - name: Determine next version
         id: version
-        run: echo "version=$(node -p \"require('./packages/electron-app/package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          # 기존 태그 중 최신 버전 조회 (v* 패턴, launcher-v* 제외)
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            # 태그가 없으면 package.json 버전 사용
+            VERSION=$(node -p "require('./packages/electron-app/package.json').version")
+          else
+            # 최신 태그에서 patch 버전 +1
+            VERSION="${LATEST_TAG#v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+            PATCH=$((PATCH + 1))
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "🏷️ Next release version: v$VERSION"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -136,5 +156,4 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: AI Hub v${{ steps.version.outputs.version }}
           files: artifacts/**/*
-          draft: true
           generate_release_notes: true

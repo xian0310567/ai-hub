@@ -82,12 +82,30 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Get version
+      - name: Determine next version
         id: version
         run: |
-          VERSION=$(node -p "require('./packages/standalone-openclaw-launcher/package.json').version")
+          # 기존 태그 중 최신 버전 조회 (launcher-v* 패턴)
+          LATEST_TAG=$(git tag -l 'launcher-v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            # 태그가 없으면 package.json 버전 사용
+            VERSION=$(node -p "require('./packages/standalone-openclaw-launcher/package.json').version")
+          else
+            # 최신 태그에서 patch 버전 +1
+            VERSION="${LATEST_TAG#launcher-v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+            PATCH=$((PATCH + 1))
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "🏷️ Next release version: launcher-v$VERSION"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -101,7 +119,6 @@ jobs:
           tag_name: launcher-v${{ steps.version.outputs.version }}
           name: Standalone OpenClaw Launcher v${{ steps.version.outputs.version }}
           files: artifacts/**/*
-          draft: true
           generate_release_notes: true
           body: |
             ### Standalone OpenClaw Launcher

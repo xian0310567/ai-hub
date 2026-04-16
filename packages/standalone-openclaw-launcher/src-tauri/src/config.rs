@@ -201,7 +201,7 @@ pub fn patch_openclaw_config(root: &mut serde_json::Value, answers: &WizardAnswe
             .entry(answers.telegram_account_id.clone())
             .or_insert_with(|| json!({})),
     );
-    account.insert("token".into(), json!(answers.telegram_bot_token));
+    account.insert("botToken".into(), json!(answers.telegram_bot_token));
 }
 
 fn ensure_object(value: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
@@ -209,6 +209,32 @@ fn ensure_object(value: &mut serde_json::Value) -> &mut serde_json::Map<String, 
         *value = serde_json::Value::Object(serde_json::Map::new());
     }
     value.as_object_mut().expect("ensured object above")
+}
+
+/// Ensure a minimal `openclaw.json` exists so the gateway can start before the
+/// wizard has been completed.  Without this the gateway reads an absent config
+/// file, fails port validation, and crashes in a restart loop.
+pub fn ensure_minimal_openclaw_config(gateway_port: u16) -> Result<()> {
+    let cfg_path = paths::openclaw_config_file()?;
+    if cfg_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = cfg_path.parent() {
+        paths::ensure_dir(parent)?;
+    }
+    let minimal = serde_json::json!({
+        "gateway": {
+            "mode": "local",
+            "port": gateway_port,
+            "bind": "loopback",
+        }
+    });
+    let bytes = serde_json::to_vec_pretty(&minimal).context("serialize minimal openclaw.json")?;
+    let tmp = cfg_path.with_extension("json.tmp");
+    fs::write(&tmp, bytes).context("write minimal openclaw.json.tmp")?;
+    fs::rename(&tmp, &cfg_path).context("atomic rename minimal openclaw.json")?;
+    tracing::info!(path = %cfg_path.display(), "created minimal openclaw.json (wizard not yet completed)");
+    Ok(())
 }
 
 /// Read-only helper for the status IPC command — returns a shallow summary of
@@ -275,7 +301,7 @@ mod tests {
         assert_eq!(root["gateway"]["mode"], "local");
         assert_eq!(root["gateway"]["bind"], "loopback");
         assert_eq!(
-            root["channels"]["telegram"]["accounts"]["default"]["token"],
+            root["channels"]["telegram"]["accounts"]["default"]["botToken"],
             "123:TOKEN"
         );
     }

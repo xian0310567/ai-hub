@@ -124,6 +124,18 @@ const explicitNeverBundleDependencies = [
   ...bundledPluginRuntimeDependencies,
 ].toSorted((left, right) => left.localeCompare(right));
 
+// These dependencies ship CJS-only (or broken dual) entry points that fail
+// under Node 22's strict ESM resolver when left as external imports.  Force-
+// bundling them into the dist output avoids runtime ERR_MODULE_NOT_FOUND on
+// standalone/launcher installs where `npm install --omit=dev` provides the
+// packages but Node refuses to load CJS main from an ESM context.
+const esmIncompatibleDependencies = ["ajv", "tslog", "zod"];
+function shouldAlwaysBundleDependency(id: string): boolean {
+  return esmIncompatibleDependencies.some(
+    (dep) => id === dep || id.startsWith(`${dep}/`),
+  );
+}
+
 function shouldNeverBundleDependency(id: string): boolean {
   return explicitNeverBundleDependencies.some((dependency) => {
     return id === dependency || id.startsWith(`${dependency}/`);
@@ -185,6 +197,7 @@ export default defineConfig([
     entry: buildUnifiedDistEntries(),
     deps: {
       neverBundle: shouldNeverBundleDependency,
+      alwaysBundle: shouldAlwaysBundleDependency,
     },
   }),
 ]);

@@ -46,6 +46,13 @@ impl TrayStatus {
 
 pub fn build_tray(app: &AppHandle) -> Result<()> {
     let open_item = MenuItem::with_id(app, "open_dashboard", "Open Dashboard", true, None::<&str>)?;
+    let reconnect_item = MenuItem::with_id(
+        app,
+        "reconnect_dashboard",
+        "Reconnect Dashboard",
+        true,
+        None::<&str>,
+    )?;
     let pause_item = MenuItem::with_id(app, "pause_resume", "Pause gateway", true, None::<&str>)?;
     let logs_item = MenuItem::with_id(app, "open_logs", "Open Logs Folder", true, None::<&str>)?;
     let wizard_item =
@@ -60,6 +67,7 @@ pub fn build_tray(app: &AppHandle) -> Result<()> {
         app,
         &[
             &open_item,
+            &reconnect_item,
             &pause_item,
             &sep1,
             &logs_item,
@@ -110,6 +118,7 @@ fn load_tray_icon(handle: &AppHandle, status: TrayStatus) -> Result<Image<'stati
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "open_dashboard" => open_dashboard_window(app),
+        "reconnect_dashboard" => reconnect_dashboard_window(app),
         "open_wizard" => open_wizard_window(app),
         "pause_resume" => toggle_pause(app),
         "open_logs" => {
@@ -126,6 +135,25 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
 fn open_dashboard_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("dashboard") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+fn reconnect_dashboard_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("dashboard") {
+        // Clear the stored device auth tokens and device identity so the
+        // control UI re-authenticates fresh with the gateway's shared token.
+        // This resolves "device token mismatch" errors that occur when the
+        // gateway is reinstalled or its data directory is reset while the
+        // Tauri webview retains tokens from the previous session.
+        let _ = win.eval(
+            "try {\
+              localStorage.removeItem('openclaw.device.auth.v1');\
+              localStorage.removeItem('openclaw-device-identity-v1');\
+              location.reload();\
+            } catch(e) {}",
+        );
         let _ = win.show();
         let _ = win.set_focus();
     }

@@ -275,12 +275,56 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
         cmd.creation_flags(0x0800_0000);
     }
 
-    let output = cmd
-        .output()
-        .await
+    let mut child = cmd
+        .spawn()
         .with_context(|| format!("spawn {}", npm.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Drain stdout/stderr in background tasks so the pipe buffers never fill
+    // up and deadlock the child process.
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+
+    let drain_stdout = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut out = stdout;
+        out.read_to_end(&mut buf).await.ok();
+        buf
+    });
+
+    let drain_stderr = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut err = stderr;
+        err.read_to_end(&mut buf).await.ok();
+        buf
+    });
+
+    // Wait for npm to finish. Every 5 s emit a heartbeat so the wizard UI
+    // stays responsive and the user can see the install is still running.
+    let start = std::time::Instant::now();
+    let status = loop {
+        tokio::select! {
+            result = child.wait() => break result.context("wait for npm")?,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                let elapsed = start.elapsed().as_secs();
+                emit(
+                    handle,
+                    "npm-install",
+                    format!("Installing packages… ({elapsed}s elapsed)"),
+                    Some(65),
+                );
+            }
+        }
+    };
+
+    // Give the drain tasks a moment to flush any remaining buffered output,
+    // then collect stderr for error reporting.
+    let stderr_bytes = drain_stderr.await.unwrap_or_default();
+    drop(drain_stdout);
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         bail!("npm install failed: {stderr}");
     }
     Ok(())

@@ -148,6 +148,15 @@ impl Supervisor {
             }
         }
 
+        // Ensure a minimal openclaw.json exists so the gateway can read a
+        // valid port even before the wizard completes.
+        {
+            let port = config.read().await.gateway_port;
+            if let Err(err) = crate::config::ensure_minimal_openclaw_config(port) {
+                tracing::warn!(?err, "could not create minimal openclaw.json");
+            }
+        }
+
         let mut backoff = Duration::from_secs(1);
         let mut signal_rx = self.signal_tx.subscribe();
         let mut restarts: u32 = 0;

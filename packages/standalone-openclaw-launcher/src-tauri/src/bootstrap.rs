@@ -32,7 +32,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::paths;
 
 // Keep this pinned per launcher release. Bump alongside the launcher version.
-const NODE_VERSION: &str = "22.14.0";
+const NODE_VERSION: &str = "22.22.2";
 const CLAUDE_CODE_VERSION: &str = "latest";
 const BUNDLED_OPENCLAW_TARBALL: &str = "resources/standalone-openclaw.tgz";
 

@@ -45,9 +45,13 @@ bridge.onStatus((snap) => {
 });
 
 bridge.onBootstrapProgress((progress) => {
-  machine.setBootstrapProgress(progress.message, progress.percent);
-  if (progress.step === "done") {
-    machine.markBootstrapComplete();
+  if (progress.step === "npm-log") {
+    machine.appendLog(progress.message);
+  } else {
+    machine.setBootstrapProgress(progress.message, progress.percent);
+    if (progress.step === "done") {
+      machine.markBootstrapComplete();
+    }
   }
   render();
 });
@@ -162,6 +166,10 @@ function renderInstallStep(state: WizardState): HTMLElement {
   fill.style.width = `${state.bootstrapPercent}%`;
   progress.appendChild(fill);
   card.appendChild(progress);
+
+  if (state.bootstrapLogs.length > 0) {
+    card.appendChild(renderLogPanel(state.bootstrapLogs));
+  }
 
   if (state.error) {
     const err = document.createElement("div");
@@ -501,6 +509,21 @@ function h2(text: string): HTMLElement {
   const el = document.createElement("h2");
   el.textContent = text;
   return el;
+}
+
+const LOG_PANEL_LINES = 14;
+
+function renderLogPanel(logs: string[]): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "log-panel";
+  const visible = logs.slice(-LOG_PANEL_LINES);
+  for (const line of visible) {
+    const row = document.createElement("div");
+    row.className = "log-line";
+    row.textContent = line;
+    panel.appendChild(row);
+  }
+  return panel;
 }
 
 void hydrate();

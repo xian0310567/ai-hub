@@ -252,7 +252,7 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
     #[cfg(target_os = "windows")]
     let openclaw_tarball = strip_windows_extended_prefix(&openclaw_tarball);
 
-    emit(handle, "npm-install", "Running npm install (this may take a minute)", Some(60));
+    emit(handle, "npm-install", "Running npm install…", Some(60));
 
     let mut cmd = tokio::process::Command::new(&npm);
     cmd.arg("install")
@@ -261,6 +261,7 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
         .arg("--no-fund")
         .arg("--no-audit")
         .arg("--omit=dev")
+        .arg("--loglevel=http")
         .arg(&openclaw_tarball)
         .arg(format!("@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"))
         .env("NODE_NO_WARNINGS", "1")
@@ -279,49 +280,42 @@ async fn npm_install(handle: &AppHandle) -> Result<()> {
         .spawn()
         .with_context(|| format!("spawn {}", npm.display()))?;
 
-    // Drain stdout/stderr in background tasks so the pipe buffers never fill
-    // up and deadlock the child process.
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
 
-    let drain_stdout = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        let mut buf = Vec::new();
-        let mut out = stdout;
-        out.read_to_end(&mut buf).await.ok();
-        buf
-    });
-
+    // Stream stderr line by line → emit each line to the wizard UI.
+    // Also collect the full output so we can surface it on failure.
+    let handle_stderr = handle.clone();
     let drain_stderr = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        let mut buf = Vec::new();
-        let mut err = stderr;
-        err.read_to_end(&mut buf).await.ok();
-        buf
-    });
-
-    // Wait for npm to finish. Every 5 s emit a heartbeat so the wizard UI
-    // stays responsive and the user can see the install is still running.
-    let start = std::time::Instant::now();
-    let status = loop {
-        tokio::select! {
-            result = child.wait() => break result.context("wait for npm")?,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                let elapsed = start.elapsed().as_secs();
-                emit(
-                    handle,
-                    "npm-install",
-                    format!("Installing packages… ({elapsed}s elapsed)"),
-                    Some(65),
-                );
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut lines = BufReader::new(stderr).lines();
+        let mut collected: Vec<u8> = Vec::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !line.trim().is_empty() {
+                emit(&handle_stderr, "npm-log", &line, None);
+                collected.extend_from_slice(line.as_bytes());
+                collected.push(b'\n');
             }
         }
-    };
+        collected
+    });
 
-    // Give the drain tasks a moment to flush any remaining buffered output,
-    // then collect stderr for error reporting.
+    // Stream stdout line by line → emit each line to the wizard UI.
+    let handle_stdout = handle.clone();
+    let drain_stdout = tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !line.trim().is_empty() {
+                emit(&handle_stdout, "npm-log", &line, None);
+            }
+        }
+    });
+
+    let status = child.wait().await.context("wait for npm")?;
+
     let stderr_bytes = drain_stderr.await.unwrap_or_default();
-    drop(drain_stdout);
+    let _ = drain_stdout.await;
 
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr_bytes);

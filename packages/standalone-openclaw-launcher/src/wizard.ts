@@ -43,6 +43,7 @@ export interface WizardState {
   bootstrapMessage: string | null;
   bootstrapPercent: number;
   bootstrapComplete: boolean;
+  bootstrapLogs: string[];
   gatewayStatus: GatewayStatusSnapshot | null;
   error: string | null;
 }
@@ -64,6 +65,7 @@ export interface WizardStateMachine {
   setBootstrapProgress(message: string, percent: number | null): void;
   markBootstrapComplete(): void;
   markClaudeAuthOk(): void;
+  appendLog(line: string): void;
   updateGatewayStatus(snap: GatewayStatusSnapshot): void;
   hydrate(args: HydrateArgs): void;
 }
@@ -100,6 +102,7 @@ export function createWizardStateMachine(): WizardStateMachine {
     bootstrapMessage: null,
     bootstrapPercent: 0,
     bootstrapComplete: false,
+    bootstrapLogs: [],
     gatewayStatus: null,
     error: null,
   };
@@ -137,6 +140,9 @@ export function createWizardStateMachine(): WizardStateMachine {
     },
     markClaudeAuthOk() {
       state.claudeAuthOk = true;
+    },
+    appendLog(line: string) {
+      state.bootstrapLogs.push(line);
     },
     updateGatewayStatus(snap: GatewayStatusSnapshot) {
       state.gatewayStatus = snap;

@@ -2,13 +2,11 @@
 setlocal enabledelayedexpansion
 
 :: ─────────────────────────────────────────────────────────────
-:: Standalone OpenClaw — Setup Script (Windows)
-:: ────────��────────────────────────────────────────────────────
-:: Prerequisites: Node.js >= 22.12
-::
-:: Usage:
-::   setup.cmd
-:: ──────────────���──────────────────────────────────────────────
+:: Standalone OpenClaw — Setup Script (Windows cmd.exe)
+:: ─────────────────────────────────────────────────────────────
+:: NOTE: In PowerShell, use setup.ps1 instead (better encoding).
+:: Prerequisites: Node.js >= 22.12, pnpm (required)
+:: ─────────────────────────────────────────────────────────────
 
 set "SCRIPT_DIR=%~dp0"
 set "MIN_NODE_MAJOR=22"
@@ -28,10 +26,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-for /f "tokens=1 delims=v" %%a in ('node -v') do set "NODE_VER=%%a"
-for /f "tokens=1 delims=." %%a in ('node -v') do set "NODE_RAW=%%a"
-set "NODE_RAW=%NODE_RAW:v=%"
-
 for /f "tokens=1,2 delims=." %%a in ('node -v') do (
     set "NODE_MAJOR=%%a"
     set "NODE_MINOR=%%b"
@@ -50,57 +44,59 @@ if %NODE_MAJOR% equ %MIN_NODE_MAJOR% (
 )
 echo [OK]    Node.js v%NODE_MAJOR%.%NODE_MINOR%
 
-:: ── Step 2: Install dependencies ────────────────────────────
-cd /d "%SCRIPT_DIR%"
-
-if exist "node_modules" (
-    echo [OK]    node_modules already exists
-    goto :check_claude
-)
-
-echo [INFO]  Installing dependencies...
+:: ── Step 2: Ensure pnpm ─────────────────────────────────────
 where pnpm >nul 2>&1
-if %errorlevel% equ 0 (
-    echo [INFO]  Using pnpm...
-    pnpm install
-) else (
-    where npm >nul 2>&1
-    if %errorlevel% equ 0 (
-        echo [INFO]  Using npm...
-        npm install
+if %errorlevel% neq 0 (
+    echo [WARN]  pnpm not found. pnpm is required.
+    set /p "INSTALL_PNPM=Install pnpm globally via 'npm install -g pnpm'? [Y/n] "
+    if /i "!INSTALL_PNPM!"=="" set "INSTALL_PNPM=y"
+    if /i "!INSTALL_PNPM!"=="y" (
+        echo [INFO]  Installing pnpm...
+        npm install -g pnpm
+        if %errorlevel% neq 0 (
+            echo [ERROR] pnpm install failed.
+            exit /b 1
+        )
     ) else (
-        echo [ERROR] Neither pnpm nor npm found.
+        echo [ERROR] Cannot continue without pnpm.
         exit /b 1
     )
 )
-echo [OK]    Dependencies installed
+echo [OK]    pnpm installed
 
-:: ── Step 2.5: Build if dist is missing ──────────────────────
-if exist "%SCRIPT_DIR%dist\entry.js" (
-    echo [OK]    dist/ already built
-    goto :check_claude
+:: ── Step 3: Install dependencies ────────────────────────────
+cd /d "%SCRIPT_DIR%"
+
+set "NEEDS_INSTALL=0"
+if not exist "node_modules" set "NEEDS_INSTALL=1"
+
+if "%NEEDS_INSTALL%"=="1" (
+    echo [INFO]  Installing dependencies with pnpm --ignore-workspace...
+    pnpm install --ignore-workspace
+    if %errorlevel% neq 0 (
+        echo [ERROR] Install failed.
+        exit /b 1
+    )
+    echo [OK]    Dependencies installed
+) else (
+    echo [OK]    node_modules already exists
 )
-if exist "%SCRIPT_DIR%dist\entry.mjs" (
-    echo [OK]    dist/ already built
-    goto :check_claude
-)
+
+:: ── Step 4: Build if dist is missing ────────────────────────
+if exist "%SCRIPT_DIR%dist\entry.js" goto :check_claude
+if exist "%SCRIPT_DIR%dist\entry.mjs" goto :check_claude
 
 echo [WARN]  dist/ not built. Running build ^(this may take several minutes^)...
-where pnpm >nul 2>&1
-if %errorlevel% equ 0 (
-    pnpm run build
-) else (
-    npm run build
-)
+pnpm --ignore-workspace run build
 if not exist "%SCRIPT_DIR%dist\entry.js" (
     if not exist "%SCRIPT_DIR%dist\entry.mjs" (
-        echo [ERROR] Build failed — dist/entry.js still missing.
+        echo [ERROR] Build failed.
         exit /b 1
     )
 )
 echo [OK]    Build complete
 
-:: ── Step 3: Check Claude CLI ────────────────────────────────
+:: ── Step 5: Check Claude CLI ────────────────────────────────
 :check_claude
 where claude >nul 2>&1
 if %errorlevel% equ 0 (
@@ -119,37 +115,23 @@ echo   Option A: Install globally:
 echo     npm install -g @anthropic-ai/claude-code
 echo.
 echo   Option B: Install locally:
-echo     cd %SCRIPT_DIR% ^&^& npm install @anthropic-ai/claude-code
-echo.
-echo   Option C: Skip if using API keys instead of CLI backend.
+echo     pnpm --ignore-workspace add @anthropic-ai/claude-code
 echo.
 
 set /p "INSTALL_CLAUDE=Install Claude CLI locally now? [y/N] "
 if /i "%INSTALL_CLAUDE%"=="y" (
     echo [INFO]  Installing @anthropic-ai/claude-code...
-    cd /d "%SCRIPT_DIR%"
-    where pnpm >nul 2>&1
-    if %errorlevel% equ 0 (
-        pnpm add @anthropic-ai/claude-code
-    ) else (
-        npm install @anthropic-ai/claude-code
-    )
+    pnpm --ignore-workspace add @anthropic-ai/claude-code
     echo [OK]    Claude CLI installed
 )
 
-:: ── Step 4: Run onboard wizard ──────────────────────────────
+:: ── Step 6: Run onboard wizard ──────────────────────────────
 :setup_config
 echo.
 echo [INFO]  Running interactive onboard wizard...
-echo   (This will configure your channels, models, and workspace)
 echo.
 
-cd /d "%SCRIPT_DIR%"
-node openclaw.mjs onboard
-if %errorlevel% neq 0 (
-    echo [WARN]  Onboard wizard exited. You can run it later with:
-    echo     cd %SCRIPT_DIR% ^&^& node openclaw.mjs onboard
-)
+node "%SCRIPT_DIR%openclaw.mjs" onboard
 
 echo.
 echo ===================================================
@@ -157,17 +139,7 @@ echo   Setup complete!
 echo ===================================================
 echo.
 echo   Start the gateway:
-echo     run.cmd
-echo.
-echo   Or run manually:
-echo     cd %SCRIPT_DIR%
-echo     node openclaw.mjs gateway run
-echo.
-echo   Other useful commands:
-echo     node openclaw.mjs doctor      Health check
-echo     node openclaw.mjs status      Channel status
-echo     node openclaw.mjs onboard     Re-run setup wizard
-echo     node openclaw.mjs --help      Full CLI help
+echo     run.cmd   (or .\run.ps1 in PowerShell)
 echo.
 
 endlocal

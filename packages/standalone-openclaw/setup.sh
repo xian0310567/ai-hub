@@ -4,7 +4,8 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────
 # Standalone OpenClaw — Setup Script (macOS / Linux)
 # ─────────────────────────────────────────────────────────────
-# Prerequisites: Node.js >= 22.12, pnpm (or npm)
+# Prerequisites: Node.js >= 22.12
+# pnpm is REQUIRED (the build script uses it internally).
 #
 # Usage:
 #   chmod +x setup.sh
@@ -36,48 +37,75 @@ check_node() {
         exit 1
     fi
 
-    local ver
+    local ver major minor
     ver="$(node -v | sed 's/^v//')"
-    local major minor
     major="$(echo "$ver" | cut -d. -f1)"
     minor="$(echo "$ver" | cut -d. -f2)"
 
     if (( major < MIN_NODE_MAJOR )) || { (( major == MIN_NODE_MAJOR )) && (( minor < MIN_NODE_MINOR )); }; then
         error "Node.js v${ver} is too old. Need >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}."
-        printf "  Current: v%s\n" "$ver"
-        printf "  Run: nvm install %s && nvm use %s\n" "$MIN_NODE_MAJOR" "$MIN_NODE_MAJOR"
         exit 1
     fi
 
     ok "Node.js v${ver}"
 }
 
-# ── Step 2: Install dependencies ────────────────────────────
-install_deps() {
-    cd "$SCRIPT_DIR"
-
-    if [ -d "node_modules" ] && [ -f "node_modules/.package-lock.json" ] || [ -d "node_modules/.pnpm" ] || [ "$(ls -A node_modules 2>/dev/null | head -1)" != "" ]; then
-        ok "node_modules already exists ($(ls node_modules | wc -l | tr -d ' ') packages)"
+# ── Step 2: Ensure pnpm is installed ────────────────────────
+# pnpm is REQUIRED:
+# 1. Build script internally calls `pnpm`
+# 2. pnpm respects `pnpm-workspace.yaml` exclusions
+# 3. npm would hoist deps to the monorepo root
+check_pnpm() {
+    if command -v pnpm &>/dev/null; then
+        ok "pnpm $(pnpm --version)"
         return 0
     fi
 
-    info "Installing dependencies..."
-
-    if command -v pnpm &>/dev/null; then
-        info "Using pnpm..."
-        pnpm install --frozen-lockfile 2>&1 || pnpm install 2>&1
-    elif command -v npm &>/dev/null; then
-        info "Using npm..."
-        npm install 2>&1
+    warn "pnpm not found. pnpm is required (build uses it internally)."
+    read -rp "Install pnpm globally via 'npm install -g pnpm'? [Y/n] " answer
+    if [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]; then
+        info "Installing pnpm..."
+        npm install -g pnpm
+        if ! command -v pnpm &>/dev/null; then
+            error "pnpm installed but not on PATH. Open a new shell and rerun setup.sh."
+            exit 1
+        fi
+        ok "pnpm $(pnpm --version) installed"
     else
-        error "Neither pnpm nor npm found. Install one of them first."
+        error "Cannot continue without pnpm. Exiting."
         exit 1
     fi
-
-    ok "Dependencies installed"
 }
 
-# ── Step 2.5: Build if dist is missing ──────────────────────
+# ── Step 3: Install dependencies ────────────────────────────
+install_deps() {
+    cd "$SCRIPT_DIR"
+
+    local needs_install=0
+    if [ ! -d "node_modules" ]; then
+        needs_install=1
+    else
+        # Sanity check — if node_modules has very few dirs, npm hoisted to parent
+        local count
+        count="$(find node_modules -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+        if [ "$count" -lt 50 ]; then
+            warn "node_modules only has $count packages — likely hoisted to parent workspace."
+            warn "Removing and reinstalling with pnpm..."
+            rm -rf node_modules
+            needs_install=1
+        else
+            ok "node_modules already exists ($count packages)"
+        fi
+    fi
+
+    if [ "$needs_install" -eq 1 ]; then
+        info "Installing dependencies with pnpm (ignoring parent workspace)..."
+        pnpm install --ignore-workspace
+        ok "Dependencies installed"
+    fi
+}
+
+# ── Step 4: Build if dist is missing ────────────────────────
 build_if_needed() {
     cd "$SCRIPT_DIR"
 
@@ -87,11 +115,7 @@ build_if_needed() {
     fi
 
     warn "dist/ not built. Running build (this may take several minutes)..."
-    if command -v pnpm &>/dev/null; then
-        pnpm run build
-    else
-        npm run build
-    fi
+    pnpm --ignore-workspace run build
 
     if [ ! -f "dist/entry.js" ] && [ ! -f "dist/entry.mjs" ]; then
         error "Build failed — dist/entry.js still missing."
@@ -100,16 +124,13 @@ build_if_needed() {
     ok "Build complete"
 }
 
-# ── Step 3: Check Claude CLI ────────────────────────────────
+# ── Step 5: Check Claude CLI ────────────────────────────────
 check_claude_cli() {
     if command -v claude &>/dev/null; then
-        local claude_path
-        claude_path="$(command -v claude)"
-        ok "Claude CLI found at: ${claude_path}"
+        ok "Claude CLI found at: $(command -v claude)"
         return 0
     fi
 
-    # Check if @anthropic-ai/claude-code is in node_modules
     if [ -x "$SCRIPT_DIR/node_modules/.bin/claude" ]; then
         ok "Claude CLI found in node_modules"
         return 0
@@ -121,7 +142,7 @@ check_claude_cli() {
     printf "    npm install -g @anthropic-ai/claude-code\n"
     printf "\n"
     printf "  ${BOLD}Option B:${NC} Install locally in this project:\n"
-    printf "    cd %s && npm install @anthropic-ai/claude-code\n" "$SCRIPT_DIR"
+    printf "    pnpm --ignore-workspace add @anthropic-ai/claude-code\n"
     printf "\n"
     printf "  ${BOLD}Option C:${NC} Skip if you'll use API keys instead of CLI backend.\n"
     printf "\n"
@@ -129,18 +150,14 @@ check_claude_cli() {
     read -rp "Install Claude CLI locally now? [y/N] " answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
         info "Installing @anthropic-ai/claude-code..."
-        if command -v pnpm &>/dev/null; then
-            (cd "$SCRIPT_DIR" && pnpm add @anthropic-ai/claude-code)
-        else
-            (cd "$SCRIPT_DIR" && npm install @anthropic-ai/claude-code)
-        fi
+        (cd "$SCRIPT_DIR" && pnpm --ignore-workspace add @anthropic-ai/claude-code)
         ok "Claude CLI installed"
     else
         info "Skipping Claude CLI installation"
     fi
 }
 
-# ── Step 4: Create default config ───────────────────────────
+# ── Step 6: Run onboard wizard ──────────────────────────────
 setup_config() {
     local config_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
     local config_file="${OPENCLAW_CONFIG_PATH:-$config_dir/openclaw.json}"
@@ -161,7 +178,6 @@ setup_config() {
     node openclaw.mjs onboard || {
         warn "Onboard wizard exited. You can run it later with:"
         printf "    cd %s && node openclaw.mjs onboard\n" "$SCRIPT_DIR"
-        printf "  Or manually edit: %s\n" "$config_file"
     }
 }
 
@@ -174,6 +190,7 @@ main() {
     printf "\n"
 
     check_node
+    check_pnpm
     install_deps
     build_if_needed
     check_claude_cli
@@ -186,10 +203,6 @@ main() {
     printf "\n"
     printf "  Start the gateway:\n"
     printf "    ${BOLD}./run.sh${NC}\n"
-    printf "\n"
-    printf "  Or run manually:\n"
-    printf "    ${BOLD}cd %s${NC}\n" "$SCRIPT_DIR"
-    printf "    ${BOLD}node openclaw.mjs gateway run${NC}\n"
     printf "\n"
     printf "  Other useful commands:\n"
     printf "    node openclaw.mjs doctor      # Health check\n"

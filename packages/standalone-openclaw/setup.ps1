@@ -12,13 +12,13 @@ function Write-Info  ($msg) { Write-Host "[INFO]  $msg" -ForegroundColor Cyan }
 function Write-Warn  ($msg) { Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
 function Write-Err   ($msg) { Write-Host "[ERROR] $msg" -ForegroundColor Red }
 
-# ── Step 1: Check Node.js ──
 Write-Host ""
 Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host "  Standalone OpenClaw - Setup" -ForegroundColor Cyan
 Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host ""
 
+# ── Step 1: Check Node.js ──
 $nodePath = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodePath) {
     Write-Err "Node.js not found. Install Node.js >= $MinNodeMajor.$MinNodeMinor first."
@@ -37,22 +37,59 @@ if ($major -lt $MinNodeMajor -or ($major -eq $MinNodeMajor -and $minor -lt $MinN
 }
 Write-OK "Node.js v$nodeVer"
 
-# ── Step 2: Install dependencies ──
+# ── Step 2: Ensure pnpm is installed ──
+# pnpm is REQUIRED because:
+# 1. The build script internally calls `pnpm` commands
+# 2. It respects `pnpm-workspace.yaml` exclusions (standalone-openclaw is excluded)
+# 3. npm would hoist deps to the monorepo root, breaking standalone usage
+$pnpmPath = Get-Command pnpm -ErrorAction SilentlyContinue
+if (-not $pnpmPath) {
+    Write-Warn "pnpm not found. pnpm is required (the build uses it internally)."
+    $answer = Read-Host "Install pnpm globally now via 'npm install -g pnpm'? [Y/n]"
+    if ($answer -eq '' -or $answer -eq 'y' -or $answer -eq 'Y') {
+        Write-Info "Installing pnpm..."
+        & npm install -g pnpm
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err "pnpm install failed. Run manually: npm install -g pnpm"
+            exit 1
+        }
+        # Re-resolve
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+        $pnpmPath = Get-Command pnpm -ErrorAction SilentlyContinue
+        if (-not $pnpmPath) {
+            Write-Err "pnpm installed but not on PATH. Open a new PowerShell window and rerun setup.ps1."
+            exit 1
+        }
+    } else {
+        Write-Err "Cannot continue without pnpm. Exiting."
+        exit 1
+    }
+}
+Write-OK "pnpm $(pnpm --version)"
+
+# ── Step 3: Install dependencies ──
 Set-Location $ScriptDir
 
-if (Test-Path "node_modules") {
-    $count = (Get-ChildItem node_modules -Directory | Measure-Object).Count
-    Write-OK "node_modules already exists ($count packages)"
+$needsInstall = $false
+if (-not (Test-Path "node_modules")) {
+    $needsInstall = $true
 } else {
-    Write-Info "Installing dependencies..."
-    $pnpmPath = Get-Command pnpm -ErrorAction SilentlyContinue
-    if ($pnpmPath) {
-        Write-Info "Using pnpm..."
-        & pnpm install
+    # Sanity check — if node_modules has very few dirs, npm probably hoisted to parent
+    $count = (Get-ChildItem node_modules -Directory | Measure-Object).Count
+    if ($count -lt 50) {
+        Write-Warn "node_modules only has $count packages — likely installed into parent workspace by npm."
+        Write-Warn "Removing and reinstalling with pnpm..."
+        Remove-Item -Recurse -Force node_modules
+        $needsInstall = $true
     } else {
-        Write-Info "Using npm..."
-        & npm install
+        Write-OK "node_modules already exists ($count packages)"
     }
+}
+
+if ($needsInstall) {
+    Write-Info "Installing dependencies with pnpm (ignoring parent workspace)..."
+    # --ignore-workspace: don't let parent ai-hub workspace interfere
+    & pnpm install --ignore-workspace
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Dependency install failed."
         exit 1
@@ -60,16 +97,12 @@ if (Test-Path "node_modules") {
     Write-OK "Dependencies installed"
 }
 
-# ── Step 2.5: Build if dist is missing ──
+# ── Step 4: Build if dist is missing ──
 $entryJs = Join-Path $ScriptDir "dist\entry.js"
 $entryMjs = Join-Path $ScriptDir "dist\entry.mjs"
 if (-not (Test-Path $entryJs) -and -not (Test-Path $entryMjs)) {
     Write-Warn "dist/ not built. Running build (this may take several minutes)..."
-    if ($pnpmPath) {
-        & pnpm run build
-    } else {
-        & npm run build
-    }
+    & pnpm --ignore-workspace run build
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Build failed. Check the error output above."
         exit 1
@@ -79,7 +112,7 @@ if (-not (Test-Path $entryJs) -and -not (Test-Path $entryMjs)) {
     Write-OK "dist/ already built"
 }
 
-# ── Step 3: Check Claude CLI ──
+# ── Step 5: Check Claude CLI ──
 $claudePath = Get-Command claude -ErrorAction SilentlyContinue
 $claudeLocal = Join-Path $ScriptDir "node_modules\.bin\claude.cmd"
 
@@ -94,7 +127,7 @@ if ($claudePath) {
     Write-Host "    npm install -g @anthropic-ai/claude-code"
     Write-Host ""
     Write-Host "  Option B: Install locally:"
-    Write-Host "    npm install @anthropic-ai/claude-code"
+    Write-Host "    pnpm add @anthropic-ai/claude-code"
     Write-Host ""
     Write-Host "  Option C: Skip if using API keys instead of CLI backend."
     Write-Host ""
@@ -102,16 +135,12 @@ if ($claudePath) {
     $answer = Read-Host "Install Claude CLI locally now? [y/N]"
     if ($answer -eq 'y' -or $answer -eq 'Y') {
         Write-Info "Installing @anthropic-ai/claude-code..."
-        if ($pnpmPath) {
-            & pnpm add @anthropic-ai/claude-code
-        } else {
-            & npm install @anthropic-ai/claude-code
-        }
+        & pnpm --ignore-workspace add @anthropic-ai/claude-code
         Write-OK "Claude CLI installed"
     }
 }
 
-# ── Step 4: Run onboard wizard ──
+# ── Step 6: Run onboard wizard ──
 Write-Host ""
 Write-Info "Running interactive onboard wizard..."
 Write-Host "  (This will configure your channels, models, and workspace)"

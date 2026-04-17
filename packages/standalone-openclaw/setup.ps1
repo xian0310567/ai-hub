@@ -60,6 +60,25 @@ if (Test-Path "node_modules") {
     Write-OK "Dependencies installed"
 }
 
+# ── Step 2.5: Build if dist is missing ──
+$entryJs = Join-Path $ScriptDir "dist\entry.js"
+$entryMjs = Join-Path $ScriptDir "dist\entry.mjs"
+if (-not (Test-Path $entryJs) -and -not (Test-Path $entryMjs)) {
+    Write-Warn "dist/ not built. Running build (this may take several minutes)..."
+    if ($pnpmPath) {
+        & pnpm run build
+    } else {
+        & npm run build
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Build failed. Check the error output above."
+        exit 1
+    }
+    Write-OK "Build complete"
+} else {
+    Write-OK "dist/ already built"
+}
+
 # ── Step 3: Check Claude CLI ──
 $claudePath = Get-Command claude -ErrorAction SilentlyContinue
 $claudeLocal = Join-Path $ScriptDir "node_modules\.bin\claude.cmd"

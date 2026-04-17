@@ -75,6 +75,31 @@ if %errorlevel% equ 0 (
 )
 echo [OK]    Dependencies installed
 
+:: ── Step 2.5: Build if dist is missing ──────────────────────
+if exist "%SCRIPT_DIR%dist\entry.js" (
+    echo [OK]    dist/ already built
+    goto :check_claude
+)
+if exist "%SCRIPT_DIR%dist\entry.mjs" (
+    echo [OK]    dist/ already built
+    goto :check_claude
+)
+
+echo [WARN]  dist/ not built. Running build ^(this may take several minutes^)...
+where pnpm >nul 2>&1
+if %errorlevel% equ 0 (
+    pnpm run build
+) else (
+    npm run build
+)
+if not exist "%SCRIPT_DIR%dist\entry.js" (
+    if not exist "%SCRIPT_DIR%dist\entry.mjs" (
+        echo [ERROR] Build failed — dist/entry.js still missing.
+        exit /b 1
+    )
+)
+echo [OK]    Build complete
+
 :: ── Step 3: Check Claude CLI ────────────────────────────────
 :check_claude
 where claude >nul 2>&1

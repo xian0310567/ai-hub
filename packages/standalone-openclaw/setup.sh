@@ -77,6 +77,29 @@ install_deps() {
     ok "Dependencies installed"
 }
 
+# ── Step 2.5: Build if dist is missing ──────────────────────
+build_if_needed() {
+    cd "$SCRIPT_DIR"
+
+    if [ -f "dist/entry.js" ] || [ -f "dist/entry.mjs" ]; then
+        ok "dist/ already built"
+        return 0
+    fi
+
+    warn "dist/ not built. Running build (this may take several minutes)..."
+    if command -v pnpm &>/dev/null; then
+        pnpm run build
+    else
+        npm run build
+    fi
+
+    if [ ! -f "dist/entry.js" ] && [ ! -f "dist/entry.mjs" ]; then
+        error "Build failed — dist/entry.js still missing."
+        exit 1
+    fi
+    ok "Build complete"
+}
+
 # ── Step 3: Check Claude CLI ────────────────────────────────
 check_claude_cli() {
     if command -v claude &>/dev/null; then
@@ -152,6 +175,7 @@ main() {
 
     check_node
     install_deps
+    build_if_needed
     check_claude_cli
     setup_config
 
